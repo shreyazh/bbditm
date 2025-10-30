@@ -8,7 +8,7 @@ const _geist = Geist({ subsets: ["latin"] })
 const _geistMono = Geist_Mono({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "BBDITM - Bhagwant Dayal Institute of Information Technology & Management",
+  title: "BBDITM - Babu Banarasi Das Institute of Information Technology & Management",
   description:
     "Premier college in Lucknow offering B.Tech, MBA, and Diploma programs with industry-focused curriculum and excellent placement record.",
   generator: "shreyazh",
