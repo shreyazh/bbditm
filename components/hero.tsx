@@ -5,7 +5,7 @@ export default function Hero() {
         <div className="text-center space-y-6">
           <h1 className="text-4xl md:text-6xl font-bold text-balance">Welcome to BBDITM</h1>
           <p className="text-lg md:text-xl text-primary-foreground/90 text-balance max-w-2xl mx-auto">
-            Bhagwant Dayal Institute of Information Technology & Management - Shaping Future Leaders in Technology and
+            Babu Banarasi Das Institute of Technology & Management - Shaping Future Leaders in Technology and
             Management
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center pt-8">
