@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   title: "BBDITM - Bhagwant Dayal Institute of Information Technology & Management",
   description:
     "Premier college in Lucknow offering B.Tech, MBA, and Diploma programs with industry-focused curriculum and excellent placement record.",
-  generator: "v0.app",
+  generator: "shreyazh",
 }
 
 export default function RootLayout({
