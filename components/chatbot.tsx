@@ -19,32 +19,10 @@ function renderFormattedContent(content: string) {
   let currentList: string[] = []
 
   lines.forEach((line, index) => {
-    // Handle section headers
-    if (line.startsWith("## ")) {
-      if (currentList.length > 0) {
-        elements.push(
-          <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
-            {currentList.map((item, i) => (
-              <li key={i} className="text-sm">
-                {item}
-              </li>
-            ))}
-          </ul>,
-        )
-        currentList = []
-      }
-      elements.push(
-        <h3 key={index} className="font-bold text-base mt-3 mb-2">
-          {line.replace("## ", "")}
-        </h3>,
-      )
-    }
-    // Handle bullet points
-    else if (line.startsWith("- ")) {
-      currentList.push(line.replace("- ", ""))
-    }
-    // Handle bold text and regular paragraphs
-    else if (line.trim()) {
+    const trimmedLine = line.trim()
+
+    // Handle horizontal rules
+    if (trimmedLine === "---" || trimmedLine.startsWith("---")) {
       if (currentList.length > 0) {
         elements.push(
           <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
@@ -58,11 +36,73 @@ function renderFormattedContent(content: string) {
         currentList = []
       }
       elements.push(
-        <p key={index} className="text-sm mb-2">
-          {renderInlineFormatting(line)}
+        <hr key={`hr-${index}`} className="my-4 border-border" />
+      )
+    }
+    // Handle h3 headers (### ) - check before h2 to avoid conflicts
+    else if (trimmedLine.startsWith("### ")) {
+      if (currentList.length > 0) {
+        elements.push(
+          <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
+            {currentList.map((item, i) => (
+              <li key={i} className="text-sm">
+                {renderInlineFormatting(item)}
+              </li>
+            ))}
+          </ul>,
+        )
+        currentList = []
+      }
+      elements.push(
+        <h3 key={`h3-${index}`} className="font-bold text-base mt-3 mb-2">
+          {renderInlineFormatting(trimmedLine.replace("### ", ""))}
+        </h3>,
+      )
+    }
+    // Handle h2 headers (## ) - check after h3
+    else if (trimmedLine.startsWith("## ")) {
+      if (currentList.length > 0) {
+        elements.push(
+          <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
+            {currentList.map((item, i) => (
+              <li key={i} className="text-sm">
+                {renderInlineFormatting(item)}
+              </li>
+            ))}
+          </ul>,
+        )
+        currentList = []
+      }
+      elements.push(
+        <h2 key={`h2-${index}`} className="font-bold text-lg mt-4 mb-3">
+          {renderInlineFormatting(trimmedLine.replace("## ", ""))}
+        </h2>,
+      )
+    }
+    // Handle bullet points
+    else if (trimmedLine.startsWith("- ")) {
+      currentList.push(trimmedLine.replace("- ", ""))
+    }
+    // Handle regular paragraphs
+    else if (trimmedLine) {
+      if (currentList.length > 0) {
+        elements.push(
+          <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
+            {currentList.map((item, i) => (
+              <li key={i} className="text-sm">
+                {renderInlineFormatting(item)}
+              </li>
+            ))}
+          </ul>,
+        )
+        currentList = []
+      }
+      elements.push(
+        <p key={`p-${index}`} className="text-sm mb-2">
+          {renderInlineFormatting(trimmedLine)}
         </p>,
       )
-    } else if (line.trim() === "" && currentList.length > 0) {
+    } else if (!trimmedLine && currentList.length > 0) {
       elements.push(
         <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
           {currentList.map((item, i) => (
@@ -92,29 +132,109 @@ function renderFormattedContent(content: string) {
   return elements
 }
 
-function renderInlineFormatting(text: string) {
+function renderInlineFormatting(text: string): React.ReactNode {
   const parts: React.ReactNode[] = []
   let lastIndex = 0
+  let keyCounter = 0
+  
+  // Find all formatting markers (bold and italic)
+  const markers: Array<{ index: number; type: 'bold' | 'italic'; content: string; length: number }> = []
+  
+  // First, find all bold markers (**text**)
   const boldRegex = /\*\*(.*?)\*\*/g
   let match
-
   while ((match = boldRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.substring(lastIndex, match.index))
-    }
-    parts.push(
-      <strong key={match.index} className="font-semibold">
-        {match[1]}
-      </strong>,
-    )
-    lastIndex = match.index + match[0].length
+    markers.push({
+      index: match.index,
+      type: 'bold',
+      content: match[1],
+      length: match[0].length
+    })
   }
-
+  
+  // Then find italic markers (*text*) - but exclude those that are part of **
+  // Check each potential italic marker to see if it's actually part of a bold marker
+  const italicRegex = /\*([^*\n]+?)\*/g
+  while ((match = italicRegex.exec(text)) !== null) {
+    const matchStart = match.index
+    const matchEnd = match.index + match[0].length
+    
+    // Check if this match is inside or overlaps with any bold marker
+    const isInsideBold = markers.some(m => {
+      if (m.type !== 'bold') return false
+      const boldStart = m.index
+      const boldEnd = m.index + m.length
+      // Check if italic marker is completely inside bold, or if it's the asterisks of bold
+      return (matchStart >= boldStart - 1 && matchEnd <= boldEnd + 1)
+    })
+    
+    // Also check if the characters before/after are asterisks (meaning it's part of **)
+    const charBefore = matchStart > 0 ? text[matchStart - 1] : ''
+    const charAfter = matchEnd < text.length ? text[matchEnd] : ''
+    const isPartOfBold = charBefore === '*' || charAfter === '*'
+    
+    if (!isInsideBold && !isPartOfBold) {
+      markers.push({
+        index: match.index,
+        type: 'italic',
+        content: match[1],
+        length: match[0].length
+      })
+    }
+  }
+  
+  // Sort markers by index to process in order
+  markers.sort((a, b) => a.index - b.index)
+  
+  // Remove overlapping markers (italic inside bold, etc.)
+  const filteredMarkers: typeof markers = []
+  markers.forEach((marker, i) => {
+    const overlaps = filteredMarkers.some(fm => {
+      const markerEnd = marker.index + marker.length
+      const fmEnd = fm.index + fm.length
+      return (marker.index >= fm.index && marker.index < fmEnd) ||
+             (markerEnd > fm.index && markerEnd <= fmEnd) ||
+             (marker.index <= fm.index && markerEnd >= fmEnd)
+    })
+    if (!overlaps) {
+      filteredMarkers.push(marker)
+    }
+  })
+  
+  // Build the result by processing markers in order
+  filteredMarkers.forEach((marker) => {
+    // Add text before this marker
+    if (marker.index > lastIndex) {
+      const beforeText = text.substring(lastIndex, marker.index)
+      if (beforeText) {
+        parts.push(beforeText)
+      }
+    }
+    
+    // Add the formatted content
+    if (marker.type === 'bold') {
+      parts.push(
+        <strong key={`bold-${keyCounter++}`} className="font-semibold">
+          {marker.content}
+        </strong>
+      )
+    } else {
+      parts.push(
+        <em key={`italic-${keyCounter++}`} className="italic">
+          {marker.content}
+        </em>
+      )
+    }
+    
+    lastIndex = marker.index + marker.length
+  })
+  
+  // Add remaining text after the last marker
   if (lastIndex < text.length) {
     parts.push(text.substring(lastIndex))
   }
-
-  return parts.length > 0 ? parts : text
+  
+  return parts.length > 0 ? <>{parts}</> : text
 }
 
 export default function ChatBot() {
