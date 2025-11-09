@@ -35,7 +35,7 @@ export default function Header() {
       className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
         isScrolled
           ? "bg-background border-b border-border shadow-sm"
-          : "bg-transparent border-none shadow-none"
+          : "bg-transparent border-none shadow-none pb-4"
       }`}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -44,7 +44,7 @@ export default function Header() {
           <Link href="/" className="flex items-center gap-3">
             <div className="relative w-12 h-12">
               <Image
-                src="/images/design-mode/loading-nitm.png"
+                src="/bbd_logo.png"
                 alt="BBDITM Logo"
                 fill
                 className="object-contain"
