@@ -97,14 +97,14 @@ const skillsAnalysisPrompt = `You are an expert resume reviewer and career couns
 
 Your task is to analyze the candidate's resume along with their detailed answers to skill assessment questions. You must provide comprehensive feedback on:
 
-1. **Answer Grading**: Grade each answer based on depth, clarity, relevance, and demonstration of expertise
+1. **Answer Grading**: Grade each answer based on depth, clarity, relevance, demonstration of expertise, and response time
 2. **Resume Improvement Suggestions**: Suggest specific improvements to the resume based on the candidate's actual experience (revealed in answers)
 3. **Skill Development Recommendations**: Identify skills that need work based on weak answers
 4. **Skills Section Optimization**: Recommend adding or removing specific skills from the resume based on the analysis
 
 **Input Data:**
 - Resume file (attached)
-- Skills with questions and answers (provided in JSON format)
+- Skills with questions, answers, and response times (provided in JSON format)
 
 **Analysis Requirements:**
 
@@ -112,6 +112,13 @@ Your task is to analyze the candidate's resume along with their detailed answers
    - Grade each answer on a scale of 1-10
    - Provide specific feedback on what was good and what was lacking
    - Identify if the answer demonstrates strong expertise or reveals gaps
+   - **Response Time Analysis**: Consider the response time (timeTaken in milliseconds) when evaluating answers:
+     * Very quick responses (< 10 seconds) may indicate either strong familiarity or lack of depth/thoughtfulness
+     * Moderate responses (10-60 seconds) typically show thoughtful consideration and reflection
+     * Longer responses (> 60 seconds) may indicate either deep thought, uncertainty, or difficulty recalling information
+     * Use response time as ONE factor in your assessment, but prioritize answer quality and depth
+     * Consider response time in context: a quick but detailed answer shows strong expertise, while a long but vague answer may indicate uncertainty
+     * Note any patterns: consistently quick responses might indicate confidence, while consistently slow responses might indicate knowledge gaps
 
 2. **Resume Improvement Suggestions:**
    - Compare the resume content with the candidate's answers
@@ -140,9 +147,10 @@ You MUST return ONLY a JSON object. Do not include any other text, conversationa
   "answer_grades": {
     "<skill_name>": {
       "grade": <Integer 1-10>,
-      "feedback": "<String: Detailed feedback on the answer, highlighting strengths and weaknesses>",
+      "feedback": "<String: Detailed feedback on the answer, highlighting strengths and weaknesses. Include observations about response time if relevant (e.g., 'Quick response suggests strong familiarity' or 'Longer response time may indicate uncertainty').>",
       "strengths": ["<String: List of strengths in the answer>"],
-      "weaknesses": ["<String: List of weaknesses or areas for improvement>"]
+      "weaknesses": ["<String: List of weaknesses or areas for improvement>"],
+      "response_time_analysis": "<String: Brief analysis of the response time in context. Note if the time taken is appropriate for the complexity of the question and answer quality.>"
     }
   },
   "resume_improvements": {
@@ -222,11 +230,15 @@ export async function POST(request: NextRequest) {
           // Handle single answer
           if (skillAnswer) {
             const answerData = JSON.parse(skillAnswer)
-            const { skillName, answer } = answerData
+            const { skillName, answer, timeTaken } = answerData
 
             if (skills[skillName]) {
               skills[skillName].answer = answer
-              console.log(`\n[${skillName}] Answer stored: ${answer.substring(0, 50)}...`)
+              if (timeTaken !== undefined) {
+                skills[skillName].timeTaken = timeTaken
+              }
+              const timeStr = timeTaken !== undefined ? ` (Time: ${(timeTaken / 1000).toFixed(2)}s)` : ""
+              console.log(`\n[${skillName}] Answer stored: ${answer.substring(0, 50)}...${timeStr}`)
             }
           }
           // Handle batch answers
@@ -278,7 +290,8 @@ export async function POST(request: NextRequest) {
             console.log("Current skills state:")
             Object.entries(skills).forEach(([name, skill]: [string, any]) => {
               const status = skill.answer && skill.answer.trim() !== "" ? "✓" : "✗"
-              console.log(`  ${status} ${name}: ${skill.answer ? "Answered" : "Pending"}`)
+              const timeInfo = skill.timeTaken !== undefined ? ` (Time: ${(skill.timeTaken / 1000).toFixed(2)}s)` : ""
+              console.log(`  ${status} ${name}: ${skill.answer ? "Answered" : "Pending"}${timeInfo}`)
             })
 
             // Automatically return the next question
@@ -381,15 +394,21 @@ export async function POST(request: NextRequest) {
         const skillsDataForAnalysis = JSON.stringify(skills, null, 2)
         const analysisPrompt = `Please analyze the following resume and skill assessment answers.
 
-**Skills with Questions and Answers:**
+**Skills with Questions, Answers, and Response Times:**
 ${skillsDataForAnalysis}
+
+**Important Notes:**
+- Each skill object includes a "timeTaken" field (in milliseconds) indicating how long the candidate took to answer
+- Response time is measured from when the question was displayed to when the answer was submitted
+- Consider response time as one factor in your assessment, but prioritize answer quality and depth
 
 **Instructions:**
 1. Review the attached resume file
 2. Analyze each answer provided for the skill questions
-3. Grade each answer (1-10 scale)
+3. Grade each answer (1-10 scale) considering both content quality and response time patterns
 4. Compare resume content with answers to identify discrepancies
 5. Provide specific, actionable recommendations
+6. Include response time analysis in your feedback when it provides meaningful insights
 
 Return your analysis in the exact JSON format specified in the system prompt.`
 
@@ -429,8 +448,16 @@ Return your analysis in the exact JSON format specified in the system prompt.`
         if (analysisData.answer_grades) {
           formattedResponse += `### Answer Grades\n\n`
           Object.entries(analysisData.answer_grades).forEach(([skillName, gradeData]: [string, any]) => {
-            formattedResponse += `**${skillName}** - Grade: ${gradeData.grade}/10\n\n`
+            // Get timeTaken from skills data if available
+            const skillData = skills[skillName]
+            const timeTaken = skillData?.timeTaken
+            const timeStr = timeTaken !== undefined ? ` (Response time: ${(timeTaken / 1000).toFixed(2)}s)` : ""
+            
+            formattedResponse += `**${skillName}** - Grade: ${gradeData.grade}/10${timeStr}\n\n`
             formattedResponse += `*Feedback:* ${gradeData.feedback}\n\n`
+            if (gradeData.response_time_analysis) {
+              formattedResponse += `*Response Time Analysis:* ${gradeData.response_time_analysis}\n\n`
+            }
             if (gradeData.strengths && gradeData.strengths.length > 0) {
               formattedResponse += `*Strengths:*\n${gradeData.strengths.map((s: string) => `- ${s}`).join("\n")}\n\n`
             }
@@ -663,7 +690,7 @@ Return your analysis in the exact JSON format specified in the system prompt.`
       // Check if this is a resume analysis response with ATS score
       if (analysisResult.ats_score && typeof analysisResult.ats_score.score === "number") {
         const atsScore = analysisResult.ats_score.score
-        const threshold = 40
+        const threshold = 60
 
         if (atsScore < threshold) {
           // Score is below threshold - return all feedback

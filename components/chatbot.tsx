@@ -11,6 +11,7 @@ interface Message {
   content: string
   timestamp: Date
   fileName?: string
+  timeTaken?: number // Response time in milliseconds (only for skill question answers)
 }
 
 function renderFormattedContent(content: string) {
@@ -255,12 +256,13 @@ export default function ChatBot() {
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isScrolled, setIsScrolled] = useState(false)
-  const [skills, setSkills] = useState<Record<string, { question: string; answer: string }> | null>(null)
+  const [skills, setSkills] = useState<Record<string, { question: string; answer: string; timeTaken?: number }> | null>(null)
   const [currentQuestion, setCurrentQuestion] = useState<{ name: string; question: string } | null>(null)
   const [isAnsweringSkill, setIsAnsweringSkill] = useState(false)
   const [fileUri, setFileUri] = useState<string | null>(null)
   const [fileMimeType, setFileMimeType] = useState<string | null>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [questionStartTime, setQuestionStartTime] = useState<number | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -313,6 +315,15 @@ export default function ChatBot() {
     scrollToBottom()
   }, [messages])
 
+  // Start timer when a new question is displayed
+  useEffect(() => {
+    if (currentQuestion && isAnsweringSkill) {
+      setQuestionStartTime(Date.now())
+    } else if (!currentQuestion) {
+      setQuestionStartTime(null)
+    }
+  }, [currentQuestion, isAnsweringSkill])
+
   const handleSendMessage = async () => {
     if (!input.trim() && !file) return
 
@@ -320,11 +331,15 @@ export default function ChatBot() {
 
     // Handle skill answer submission
     if (isAnsweringSkill && currentQuestion && input.trim()) {
+      // Calculate time taken
+      const timeTaken = questionStartTime ? Date.now() - questionStartTime : 0
+      
       const userMessage: Message = {
         id: Date.now().toString(),
         type: "user",
         content: input,
         timestamp: new Date(),
+        timeTaken: timeTaken, // Store time taken for skill question answers
       }
 
       setMessages((prev) => [...prev, userMessage])
@@ -332,11 +347,21 @@ export default function ChatBot() {
       setInput("")
       setIsLoading(true)
 
+      // Update skills with answer and timeTaken before sending to API
+      const updatedSkillsForSubmission = skills ? { ...skills } : null
+      if (updatedSkillsForSubmission && currentQuestion.name in updatedSkillsForSubmission) {
+        updatedSkillsForSubmission[currentQuestion.name] = {
+          ...updatedSkillsForSubmission[currentQuestion.name],
+          answer: answer,
+          timeTaken: timeTaken,
+        }
+      }
+
       try {
         const formData = new FormData()
         formData.append("action", "submit_skill_answer")
-        formData.append("skills", JSON.stringify(skills))
-        formData.append("skillAnswer", JSON.stringify({ skillName: currentQuestion.name, answer: answer }))
+        formData.append("skills", JSON.stringify(updatedSkillsForSubmission || skills))
+        formData.append("skillAnswer", JSON.stringify({ skillName: currentQuestion.name, answer: answer, timeTaken: timeTaken }))
 
         const response = await fetch("/api/chat", {
           method: "POST",
@@ -354,12 +379,15 @@ export default function ChatBot() {
           setSkills(data.skills)
         }
 
+        // Reset timer
+        setQuestionStartTime(null)
+
         // If all answered, trigger analysis
         if (data.allAnswered) {
           setIsAnsweringSkill(false)
           setCurrentQuestion(null)
           // Update skills first, then trigger analysis
-          const updatedSkills = data.skills || skills
+          const updatedSkills = data.skills || updatedSkillsForSubmission || skills
           if (updatedSkills) {
             setSkills(updatedSkills)
           }
@@ -368,7 +396,7 @@ export default function ChatBot() {
             await analyzeSkills(updatedSkills, fileUri, fileMimeType)
           }
         } else {
-          // Set next question
+          // Set next question (timer will start automatically via useEffect)
           setCurrentQuestion(data.nextQuestion)
         }
 
@@ -468,7 +496,7 @@ export default function ChatBot() {
   }
 
   // Function to get the next question
-  const getNextQuestion = async (skillsData?: Record<string, { question: string; answer: string }>) => {
+  const getNextQuestion = async (skillsData?: Record<string, { question: string; answer: string; timeTaken?: number }>) => {
     const skillsToUse = skillsData || skills
     if (!skillsToUse) return
 
@@ -492,12 +520,14 @@ export default function ChatBot() {
       if (data.allAnswered) {
         setIsAnsweringSkill(false)
         setCurrentQuestion(null)
+        setQuestionStartTime(null)
         // Automatically trigger analysis if file URI is available
         if (fileUri && data.skills) {
           await analyzeSkills(data.skills, fileUri, fileMimeType)
         }
       } else {
         setIsAnsweringSkill(true)
+        // Timer will start automatically via useEffect when currentQuestion is set
         setCurrentQuestion(data.nextQuestion)
       }
 
@@ -524,7 +554,7 @@ export default function ChatBot() {
 
   // Function to analyze skills
   const analyzeSkills = async (
-    skillsData: Record<string, { question: string; answer: string }>,
+    skillsData: Record<string, { question: string; answer: string; timeTaken?: number }>,
     resumeFileUri: string,
     resumeMimeType?: string | null
   ) => {
@@ -643,6 +673,7 @@ export default function ChatBot() {
     setFileUri(null)
     setFileMimeType(null)
     setIsAnalyzing(false)
+    setQuestionStartTime(null)
     // Reset file input if it exists
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
@@ -740,9 +771,16 @@ export default function ChatBot() {
                   ) : (
                     <p className="text-sm">{message.content}</p>
                   )}
-                  <p className="text-xs mt-1 opacity-70">
-                    {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </p>
+                  <div className="flex flex-col gap-1 mt-1">
+                    <p className="text-xs opacity-70">
+                      {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                    {message.type === "user" && message.timeTaken !== undefined && (
+                      <p className="text-xs opacity-60 italic">
+                        Time taken: {(message.timeTaken / 1000).toFixed(2)}s
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
