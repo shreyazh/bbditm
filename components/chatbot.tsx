@@ -132,8 +132,21 @@ export default function ChatBot() {
   const [isLoading, setIsLoading] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isScrolled, setIsScrolled] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollPosition = window.scrollY
+      setIsScrolled(scrollPosition > 50)
+    }
+
+    window.addEventListener("scroll", handleScroll, { passive: true })
+    handleScroll()
+
+    return () => window.removeEventListener("scroll", handleScroll)
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -259,7 +272,11 @@ export default function ChatBot() {
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className="fixed bottom-6 right-6 w-14 h-14 bg-primary text-primary-foreground rounded-full shadow-lg hover:bg-primary/90 transition flex items-center justify-center z-40"
+          className={`fixed bottom-6 right-6 w-14 h-14 rounded-full shadow-lg transition flex items-center justify-center z-40 ${
+            isScrolled
+              ? "bg-primary text-primary-foreground hover:bg-primary/90"
+              : "bg-white text-primary hover:bg-white/90"
+          }`}
           aria-label="Open chat"
         >
           <MessageCircle size={24} />
