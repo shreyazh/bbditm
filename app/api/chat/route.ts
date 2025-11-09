@@ -47,11 +47,495 @@ You MUST return ONLY a JSON object. Do not include any other text, conversationa
   ]
 }`
 
+const skillsExtractionPrompt = `You are a skill extraction and assessment system.
+
+Your task is to extract ALL technical and professional skills from the attached resume file. For each skill identified, you must generate a high-level, open-ended question that would help assess the candidate's proficiency and experience with that skill.
+
+**Instructions:**
+1. Extract every skill mentioned in the resume, including:
+   - Programming languages
+   - Frameworks and libraries
+   - Tools and technologies
+   - Software platforms
+   - Methodologies
+   - Soft skills (if relevant)
+   - Domain-specific knowledge
+
+2. For each skill, generate ONE high-level question that:
+   - Is open-ended and allows for detailed response
+   - Focuses on practical experience and application
+   - Is relevant to how the skill would be used in a professional setting
+   - Examples:
+     - For "Python": "Can you describe a complex project where you used Python? What challenges did you face and how did you overcome them?"
+     - For "React": "Tell me about your experience building user interfaces with React. What was the most challenging component you've created?"
+     - For "AWS": "Describe your experience with AWS cloud services. What specific services have you used and for what purposes?"
+
+3. You MUST return ONLY a JSON object. Do not include any other text, conversational preamble, or markdown formatting (like \`\`\`json). The response must be parsable JSON.
+
+**Required JSON Structure:**
+{
+  "skills": {
+    "<skill_name_1>": {
+      "question": "<high-level question for this skill>",
+      "answer": ""
+    },
+    "<skill_name_2>": {
+      "question": "<high-level question for this skill>",
+      "answer": ""
+    }
+  }
+}
+
+**Important:**
+- Use the exact skill name as it appears in the resume or a standardized version (e.g., "JavaScript" not "JS")
+- Each skill should be a unique key in the skills object
+- The answer field must always be an empty string ""
+- Extract ALL skills mentioned in the resume, not just the most prominent ones
+- Generate thoughtful, assessment-focused questions for each skill`
+
+const skillsAnalysisPrompt = `You are an expert resume reviewer and career counselor with deep expertise in technical recruitment and resume optimization.
+
+Your task is to analyze the candidate's resume along with their detailed answers to skill assessment questions. You must provide comprehensive feedback on:
+
+1. **Answer Grading**: Grade each answer based on depth, clarity, relevance, and demonstration of expertise
+2. **Resume Improvement Suggestions**: Suggest specific improvements to the resume based on the candidate's actual experience (revealed in answers)
+3. **Skill Development Recommendations**: Identify skills that need work based on weak answers
+4. **Skills Section Optimization**: Recommend adding or removing specific skills from the resume based on the analysis
+
+**Input Data:**
+- Resume file (attached)
+- Skills with questions and answers (provided in JSON format)
+
+**Analysis Requirements:**
+
+1. **Answer Grading (for each skill):**
+   - Grade each answer on a scale of 1-10
+   - Provide specific feedback on what was good and what was lacking
+   - Identify if the answer demonstrates strong expertise or reveals gaps
+
+2. **Resume Improvement Suggestions:**
+   - Compare the resume content with the candidate's answers
+   - Identify discrepancies (e.g., resume says "expert" but answer shows limited experience)
+   - Suggest specific sections to improve with concrete examples
+   - Recommend quantifiable achievements to add
+   - Suggest better wording or formatting
+
+3. **Skill Development Recommendations:**
+   - Identify skills where answers were weak or incomplete
+   - Suggest specific areas to work on for each skill
+   - Recommend learning resources or projects
+   - Prioritize which skills are most critical to improve
+
+4. **Skills Section Optimization:**
+   - Recommend skills to ADD (based on answers showing expertise not mentioned in resume)
+   - Recommend skills to REMOVE (based on weak answers or irrelevance)
+   - Suggest reordering or categorizing skills
+   - Identify missing skills that should be added based on the candidate's experience
+
+**Response Format:**
+
+You MUST return ONLY a JSON object. Do not include any other text, conversational preamble, or markdown formatting (like \`\`\`json). The response must be parsable JSON.
+
+{
+  "answer_grades": {
+    "<skill_name>": {
+      "grade": <Integer 1-10>,
+      "feedback": "<String: Detailed feedback on the answer, highlighting strengths and weaknesses>",
+      "strengths": ["<String: List of strengths in the answer>"],
+      "weaknesses": ["<String: List of weaknesses or areas for improvement>"]
+    }
+  },
+  "resume_improvements": {
+    "sections_to_improve": [
+      {
+        "section": "<String: Section name (e.g., 'Experience', 'Skills', 'Projects')>",
+        "suggestion": "<String: Specific improvement suggestion>",
+        "priority": "<String: 'high', 'medium', or 'low'>",
+        "example": "<String: Example of how to improve it>"
+      }
+    ],
+    "achievements_to_add": [
+      "<String: Specific quantifiable achievement suggestion>"
+    ],
+    "wording_suggestions": [
+      {
+        "current": "<String: Current wording from resume>",
+        "improved": "<String: Improved wording>",
+        "reason": "<String: Why this is better>"
+      }
+    ]
+  },
+  "skill_development": {
+    "skills_to_work_on": [
+      {
+        "skill": "<String: Skill name>",
+        "priority": "<String: 'high', 'medium', or 'low'>",
+        "areas_to_improve": ["<String: Specific areas to work on>"],
+        "recommendations": "<String: Specific recommendations for improvement>",
+        "learning_resources": ["<String: Suggested learning resources or projects>"]
+      }
+    ]
+  },
+  "skills_section_optimization": {
+    "skills_to_add": [
+      {
+        "skill": "<String: Skill name to add>",
+        "reason": "<String: Why this skill should be added>",
+        "category": "<String: Category (e.g., 'Programming Languages', 'Frameworks', 'Tools')>"
+      }
+    ],
+    "skills_to_remove": [
+      {
+        "skill": "<String: Skill name to remove>",
+        "reason": "<String: Why this skill should be removed>"
+      }
+    ],
+    "skills_to_reorder": [
+      {
+        "skill": "<String: Skill name>",
+        "new_position": "<String: Suggested new position or category>",
+        "reason": "<String: Why this reordering is recommended>"
+      }
+    ]
+  },
+  "overall_summary": "<String: A comprehensive summary of the analysis with key takeaways and actionable next steps>"
+}`
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
     const message = formData.get("message") as string
     const file = formData.get("file") as File | null
+    const skillAnswer = formData.get("skillAnswer") as string | null // Single answer: {skillName: "Python", answer: "..."}
+    const skillsAnswers = formData.get("skillsAnswers") as string | null // Batch answers: {skill1: "answer1", skill2: "answer2"}
+    const existingSkills = formData.get("skills") as string | null
+    const fileUri = formData.get("fileUri") as string | null // Resume file URI for analysis
+    const fileMimeType = formData.get("fileMimeType") as string | null // Resume file MIME type for analysis
+    const action = formData.get("action") as string | null // "submit_skill_answer", "get_next_question", or "analyze_skills"
+
+    // Handle skill answer submission (iterative Q&A)
+    if (action === "submit_skill_answer" && existingSkills) {
+      try {
+        const skills = JSON.parse(existingSkills)
+
+        if (skills && typeof skills === "object") {
+          // Handle single answer
+          if (skillAnswer) {
+            const answerData = JSON.parse(skillAnswer)
+            const { skillName, answer } = answerData
+
+            if (skills[skillName]) {
+              skills[skillName].answer = answer
+              console.log(`\n[${skillName}] Answer stored: ${answer.substring(0, 50)}...`)
+            }
+          }
+          // Handle batch answers
+          else if (skillsAnswers) {
+            const answers = JSON.parse(skillsAnswers)
+            Object.keys(answers).forEach((skillName) => {
+              if (skills[skillName] && answers[skillName]) {
+                skills[skillName].answer = answers[skillName]
+                console.log(`[${skillName}] Answer stored: ${answers[skillName].substring(0, 50)}...`)
+              }
+            })
+          }
+
+          // Check if all questions are answered
+          const allAnswered = Object.values(skills).every(
+            (skill: any) => skill.answer && skill.answer.trim() !== ""
+          )
+
+          // Get unanswered questions
+          const unansweredSkills = Object.entries(skills)
+            .filter(([_, skill]: [string, any]) => !skill.answer || skill.answer.trim() === "")
+            .map(([name, skill]: [string, any]) => ({ name, question: skill.question }))
+
+          // Log current progress
+          const answeredCount = Object.values(skills).filter(
+            (skill: any) => skill.answer && skill.answer.trim() !== ""
+          ).length
+          const totalCount = Object.keys(skills).length
+          console.log(`\nProgress: ${answeredCount}/${totalCount} questions answered`)
+
+          // Log the final skills object when all answers are received
+          if (allAnswered) {
+            console.log("\n" + "=".repeat(60))
+            console.log("=== FINAL SKILLS OBJECT WITH ALL ANSWERS ===")
+            console.log("=".repeat(60))
+            console.log(JSON.stringify({ skills }, null, 2))
+            console.log("=".repeat(60) + "\n")
+
+            return NextResponse.json({
+              response: "## Thank You! 🎉\n\nAll skill questions have been answered. Your responses have been saved and will be used for further analysis.",
+              skills: skills,
+              allAnswered: true,
+              unansweredCount: 0,
+              nextQuestion: null,
+            })
+          } else {
+            // Log current state for debugging
+            console.log(`Remaining questions: ${unansweredSkills.length}`)
+            console.log("Current skills state:")
+            Object.entries(skills).forEach(([name, skill]: [string, any]) => {
+              const status = skill.answer && skill.answer.trim() !== "" ? "✓" : "✗"
+              console.log(`  ${status} ${name}: ${skill.answer ? "Answered" : "Pending"}`)
+            })
+
+            // Automatically return the next question
+            const nextQuestion = unansweredSkills[0]
+            const nextAnsweredCount = answeredCount + 1
+
+            return NextResponse.json({
+              response: `Thank you for your answer!\n\n**Question ${nextAnsweredCount} of ${totalCount}:**\n\n**${nextQuestion.name}**\n${nextQuestion.question}\n\nPlease provide your answer:`,
+              skills: skills,
+              allAnswered: false,
+              unansweredCount: unansweredSkills.length,
+              nextQuestion: nextQuestion,
+              progress: { answered: answeredCount, total: totalCount },
+            })
+          }
+        }
+      } catch (parseError) {
+        console.error("Error parsing skills/answers:", parseError)
+        return NextResponse.json({ error: "Invalid skills or answer format" }, { status: 400 })
+      }
+    }
+
+    // Handle getting the next unanswered question
+    if (action === "get_next_question" && existingSkills) {
+      try {
+        const skills = JSON.parse(existingSkills)
+        const unansweredSkills = Object.entries(skills)
+          .filter(([_, skill]: [string, any]) => !skill.answer || skill.answer.trim() === "")
+          .map(([name, skill]: [string, any]) => ({ name, question: skill.question }))
+
+        if (unansweredSkills.length === 0) {
+          return NextResponse.json({
+            response: "All questions have been answered!",
+            skills: skills,
+            allAnswered: true,
+            nextQuestion: null,
+          })
+        }
+
+        const nextQuestion = unansweredSkills[0]
+        const answeredCount = Object.values(skills).filter(
+          (skill: any) => skill.answer && skill.answer.trim() !== ""
+        ).length
+        const totalCount = Object.keys(skills).length
+
+        return NextResponse.json({
+          response: `**Question ${answeredCount + 1} of ${totalCount}:**\n\n**${nextQuestion.name}**\n${nextQuestion.question}\n\nPlease provide your answer:`,
+          skills: skills,
+          nextQuestion: nextQuestion,
+          allAnswered: false,
+          progress: { answered: answeredCount, total: totalCount },
+        })
+      } catch (parseError) {
+        console.error("Error parsing skills:", parseError)
+        return NextResponse.json({ error: "Invalid skills format" }, { status: 400 })
+      }
+    }
+
+    // Handle skills analysis request
+    if (action === "analyze_skills" && existingSkills && fileUri) {
+      try {
+        const skills = JSON.parse(existingSkills)
+
+        // Verify all questions are answered
+        const allAnswered = Object.values(skills).every(
+          (skill: any) => skill.answer && skill.answer.trim() !== ""
+        )
+
+        if (!allAnswered) {
+          return NextResponse.json(
+            { error: "All skill questions must be answered before analysis" },
+            { status: 400 }
+          )
+        }
+
+        console.log("\n=== Starting Skills Analysis ===")
+        console.log(`File URI: ${fileUri}`)
+        console.log(`Skills to analyze: ${Object.keys(skills).length}`)
+
+        // Create analysis model
+        const analysisModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
+        const analysisChat = analysisModel.startChat({
+          history: [
+            {
+              role: "user",
+              parts: [{ text: skillsAnalysisPrompt }],
+            },
+            {
+              role: "model",
+              parts: [
+                {
+                  text: "I understand. I will analyze the resume and skill answers to provide comprehensive feedback on answer grades, resume improvements, skill development recommendations, and skills section optimization. I will return only valid JSON.",
+                },
+              ],
+            },
+          ],
+        })
+
+        // Prepare the skills data for analysis
+        const skillsDataForAnalysis = JSON.stringify(skills, null, 2)
+        const analysisPrompt = `Please analyze the following resume and skill assessment answers.
+
+**Skills with Questions and Answers:**
+${skillsDataForAnalysis}
+
+**Instructions:**
+1. Review the attached resume file
+2. Analyze each answer provided for the skill questions
+3. Grade each answer (1-10 scale)
+4. Compare resume content with answers to identify discrepancies
+5. Provide specific, actionable recommendations
+
+Return your analysis in the exact JSON format specified in the system prompt.`
+
+        // Create file data part using the file URI
+        const fileDataPart: FileDataPart = {
+          fileData: {
+            mimeType: fileMimeType || "application/pdf", // Use provided MIME type or default to PDF
+            fileUri: fileUri,
+          },
+        }
+
+        // Send analysis request
+        const analysisParts: Array<{ text: string } | FileDataPart> = [
+          fileDataPart,
+          { text: analysisPrompt },
+        ]
+
+        const analysisResult = await analysisChat.sendMessage(analysisParts)
+        const analysisResponse = analysisResult.response.text()
+
+        // Parse analysis JSON response
+        let analysisJsonString = analysisResponse.trim()
+        if (analysisJsonString.startsWith("```json")) {
+          analysisJsonString = analysisJsonString.replace(/^```json\s*/, "").replace(/\s*```$/, "")
+        } else if (analysisJsonString.startsWith("```")) {
+          analysisJsonString = analysisJsonString.replace(/^```\s*/, "").replace(/\s*```$/, "")
+        }
+
+        const analysisData = JSON.parse(analysisJsonString)
+        console.log("\n=== Analysis Complete ===")
+        console.log(JSON.stringify(analysisData, null, 2))
+
+        // Format the analysis response for user display
+        let formattedResponse = `## 📊 Skills Analysis Complete\n\n`
+
+        // Answer Grades Section
+        if (analysisData.answer_grades) {
+          formattedResponse += `### Answer Grades\n\n`
+          Object.entries(analysisData.answer_grades).forEach(([skillName, gradeData]: [string, any]) => {
+            formattedResponse += `**${skillName}** - Grade: ${gradeData.grade}/10\n\n`
+            formattedResponse += `*Feedback:* ${gradeData.feedback}\n\n`
+            if (gradeData.strengths && gradeData.strengths.length > 0) {
+              formattedResponse += `*Strengths:*\n${gradeData.strengths.map((s: string) => `- ${s}`).join("\n")}\n\n`
+            }
+            if (gradeData.weaknesses && gradeData.weaknesses.length > 0) {
+              formattedResponse += `*Areas for Improvement:*\n${gradeData.weaknesses.map((w: string) => `- ${w}`).join("\n")}\n\n`
+            }
+            formattedResponse += `---\n\n`
+          })
+        }
+
+        // Resume Improvements Section
+        if (analysisData.resume_improvements) {
+          formattedResponse += `### 📝 Resume Improvement Suggestions\n\n`
+
+          if (analysisData.resume_improvements.sections_to_improve?.length > 0) {
+            formattedResponse += `**Sections to Improve:**\n\n`
+            analysisData.resume_improvements.sections_to_improve.forEach((item: any) => {
+              formattedResponse += `**${item.section}** (Priority: ${item.priority})\n`
+              formattedResponse += `${item.suggestion}\n`
+              if (item.example) {
+                formattedResponse += `*Example:* ${item.example}\n`
+              }
+              formattedResponse += `\n`
+            })
+          }
+
+          if (analysisData.resume_improvements.achievements_to_add?.length > 0) {
+            formattedResponse += `**Achievements to Add:**\n`
+            analysisData.resume_improvements.achievements_to_add.forEach((achievement: string) => {
+              formattedResponse += `- ${achievement}\n`
+            })
+            formattedResponse += `\n`
+          }
+
+          if (analysisData.resume_improvements.wording_suggestions?.length > 0) {
+            formattedResponse += `**Wording Suggestions:**\n\n`
+            analysisData.resume_improvements.wording_suggestions.forEach((suggestion: any) => {
+              formattedResponse += `*Current:* ${suggestion.current}\n`
+              formattedResponse += `*Improved:* ${suggestion.improved}\n`
+              formattedResponse += `*Reason:* ${suggestion.reason}\n\n`
+            })
+          }
+        }
+
+        // Skill Development Section
+        if (analysisData.skill_development?.skills_to_work_on?.length > 0) {
+          formattedResponse += `### 🎯 Skill Development Recommendations\n\n`
+          analysisData.skill_development.skills_to_work_on.forEach((item: any) => {
+            formattedResponse += `**${item.skill}** (Priority: ${item.priority})\n\n`
+            formattedResponse += `*Areas to Improve:*\n${item.areas_to_improve.map((a: string) => `- ${a}`).join("\n")}\n\n`
+            formattedResponse += `*Recommendations:* ${item.recommendations}\n\n`
+            if (item.learning_resources && item.learning_resources.length > 0) {
+              formattedResponse += `*Learning Resources:*\n${item.learning_resources.map((r: string) => `- ${r}`).join("\n")}\n\n`
+            }
+            formattedResponse += `---\n\n`
+          })
+        }
+
+        // Skills Section Optimization
+        if (analysisData.skills_section_optimization) {
+          formattedResponse += `### 🔧 Skills Section Optimization\n\n`
+
+          if (analysisData.skills_section_optimization.skills_to_add?.length > 0) {
+            formattedResponse += `**Skills to Add:**\n\n`
+            analysisData.skills_section_optimization.skills_to_add.forEach((item: any) => {
+              formattedResponse += `- **${item.skill}** (${item.category})\n`
+              formattedResponse += `  *Reason:* ${item.reason}\n\n`
+            })
+          }
+
+          if (analysisData.skills_section_optimization.skills_to_remove?.length > 0) {
+            formattedResponse += `**Skills to Remove:**\n\n`
+            analysisData.skills_section_optimization.skills_to_remove.forEach((item: any) => {
+              formattedResponse += `- **${item.skill}**\n`
+              formattedResponse += `  *Reason:* ${item.reason}\n\n`
+            })
+          }
+
+          if (analysisData.skills_section_optimization.skills_to_reorder?.length > 0) {
+            formattedResponse += `**Skills to Reorder:**\n\n`
+            analysisData.skills_section_optimization.skills_to_reorder.forEach((item: any) => {
+              formattedResponse += `- **${item.skill}** → ${item.new_position}\n`
+              formattedResponse += `  *Reason:* ${item.reason}\n\n`
+            })
+          }
+        }
+
+        // Overall Summary
+        if (analysisData.overall_summary) {
+          formattedResponse += `### 📋 Overall Summary\n\n${analysisData.overall_summary}\n`
+        }
+
+        return NextResponse.json({
+          response: formattedResponse,
+          analysis: analysisData,
+          skills: skills,
+        })
+      } catch (analysisError) {
+        console.error("Error analyzing skills:", analysisError)
+        return NextResponse.json(
+          { error: "Failed to analyze skills. Please try again." },
+          { status: 500 }
+        )
+      }
+    }
 
     if (!message && !file) {
       return NextResponse.json({ error: "Message or file is required" }, { status: 400 })
@@ -65,6 +549,8 @@ export async function POST(request: NextRequest) {
 
     // Prepare message parts
     const parts: Array<{ text: string } | FileDataPart> = []
+    let fileDataPart: FileDataPart | null = null
+    let fileMetadata: any = null
 
     // Handle file upload - use Gemini's File API for proper PDF processing
     if (file) {
@@ -97,7 +583,7 @@ export async function POST(request: NextRequest) {
 
       // Wait for file processing to complete (if needed)
       // For PDFs and documents, Gemini needs to process them before they can be used
-      let fileMetadata = uploadResponse.file
+      fileMetadata = uploadResponse.file
       const maxWaitTime = 30000 // 30 seconds max wait
       const pollInterval = 1000 // Check every second
       const startTime = Date.now()
@@ -125,7 +611,7 @@ export async function POST(request: NextRequest) {
 
       // Create file data part using the uploaded file URI
       // Gemini will automatically extract and process the text content
-      const fileDataPart: FileDataPart = {
+      fileDataPart = {
         fileData: {
           mimeType: mimeType,
           fileUri: fileMetadata.uri,
@@ -212,8 +698,71 @@ ${analysisResult.formatting_issues?.length > 0
 
           return NextResponse.json({ response: feedbackMessage })
         } else {
+          // Score is at or above threshold - extract skills from resume
+          let skillsData = null
+
+          if (fileDataPart && fileMetadata) {
+            try {
+              // Create a new chat session for skills extraction
+              const skillsModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
+              const skillsChat = skillsModel.startChat({
+                history: [
+                  {
+                    role: "user",
+                    parts: [{ text: skillsExtractionPrompt }],
+                  },
+                  {
+                    role: "model",
+                    parts: [
+                      {
+                        text: "I understand. I will extract all skills from the resume and generate high-level assessment questions for each skill. I will return only valid JSON.",
+                      },
+                    ],
+                  },
+                ],
+              })
+
+              // Use the already uploaded file to extract skills
+              const skillsParts: Array<{ text: string } | FileDataPart> = [fileDataPart]
+              const skillsResult = await skillsChat.sendMessage(skillsParts)
+              const skillsResponse = skillsResult.response.text()
+
+              // Parse skills JSON response
+              let skillsJsonString = skillsResponse.trim()
+              if (skillsJsonString.startsWith("```json")) {
+                skillsJsonString = skillsJsonString.replace(/^```json\s*/, "").replace(/\s*```$/, "")
+              } else if (skillsJsonString.startsWith("```")) {
+                skillsJsonString = skillsJsonString.replace(/^```\s*/, "").replace(/\s*```$/, "")
+              }
+
+              skillsData = JSON.parse(skillsJsonString)
+              console.log("Skills data extracted:", JSON.stringify(skillsData, null, 2))
+
+              // Validate skills structure
+              if (!skillsData.skills || typeof skillsData.skills !== "object") {
+                console.error("Invalid skills structure returned from API")
+                skillsData = null
+              } else {
+                // Log extracted skills with questions (answers are empty)
+                const skills = skillsData.skills
+                const skillNames = Object.keys(skills)
+                console.log(`\n=== Extracted ${skillNames.length} skills with questions ===`)
+                skillNames.forEach((skillName) => {
+                  console.log(`\n[${skillName}]`)
+                  console.log(`Question: ${skills[skillName].question}`)
+                  console.log(`Answer: ${skills[skillName].answer || "(empty - waiting for user input)"}`)
+                })
+                console.log("\n=== Skills ready for user Q&A ===\n")
+              }
+            } catch (skillsError) {
+              console.error("Error extracting skills:", skillsError)
+              // Continue without skills data if extraction fails
+              skillsData = null
+            }
+          }
+
           // Score is at or above threshold - return success message
-          const successMessage = `## Congratulations! Your Resume Passed the ATS Review
+          let successMessage = `## Congratulations! Your Resume Passed the ATS Review
 
 Your resume scored **${atsScore}/100** on our ATS analysis, which meets our threshold for moving forward.
 
@@ -231,7 +780,27 @@ If you'd like to further improve your resume, consider reviewing the optional fe
 **Strengths:**
 ${analysisResult.feedback?.positive || "No specific feedback available."}`
 
-          return NextResponse.json({ response: successMessage })
+          // Add skills questions section if skills were extracted
+          if (skillsData?.skills) {
+            const skillCount = Object.keys(skillsData.skills).length
+            successMessage += `\n\n---
+
+## Skill Assessment
+
+We've identified **${skillCount} skill(s)** in your resume. I'll now ask you a few questions about each skill to better understand your experience.
+
+Let's get started with the first question!`
+          }
+
+          // Return response with skills data and file URI if available
+          return NextResponse.json({
+            response: successMessage,
+            skills: skillsData?.skills || null,
+            hasSkills: !!skillsData?.skills,
+            skillsCount: skillsData?.skills ? Object.keys(skillsData.skills).length : 0,
+            fileUri: fileMetadata?.uri || null, // Include file URI for later analysis
+            fileMimeType: fileDataPart?.fileData?.mimeType || "application/pdf", // Include MIME type for later analysis
+          })
         }
       }
     } catch (parseError) {

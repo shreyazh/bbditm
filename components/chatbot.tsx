@@ -135,6 +135,12 @@ export default function ChatBot() {
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isScrolled, setIsScrolled] = useState(false)
+  const [skills, setSkills] = useState<Record<string, { question: string; answer: string }> | null>(null)
+  const [currentQuestion, setCurrentQuestion] = useState<{ name: string; question: string } | null>(null)
+  const [isAnsweringSkill, setIsAnsweringSkill] = useState(false)
+  const [fileUri, setFileUri] = useState<string | null>(null)
+  const [fileMimeType, setFileMimeType] = useState<string | null>(null)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -192,6 +198,85 @@ export default function ChatBot() {
 
     setError(null)
 
+    // Handle skill answer submission
+    if (isAnsweringSkill && currentQuestion && input.trim()) {
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        type: "user",
+        content: input,
+        timestamp: new Date(),
+      }
+
+      setMessages((prev) => [...prev, userMessage])
+      const answer = input
+      setInput("")
+      setIsLoading(true)
+
+      try {
+        const formData = new FormData()
+        formData.append("action", "submit_skill_answer")
+        formData.append("skills", JSON.stringify(skills))
+        formData.append("skillAnswer", JSON.stringify({ skillName: currentQuestion.name, answer: answer }))
+
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          body: formData,
+        })
+
+        if (!response.ok) {
+          throw new Error(`API error: ${response.statusText}`)
+        }
+
+        const data = await response.json()
+
+        // Update skills state
+        if (data.skills) {
+          setSkills(data.skills)
+        }
+
+        // If all answered, trigger analysis
+        if (data.allAnswered) {
+          setIsAnsweringSkill(false)
+          setCurrentQuestion(null)
+          // Update skills first, then trigger analysis
+          const updatedSkills = data.skills || skills
+          if (updatedSkills) {
+            setSkills(updatedSkills)
+          }
+          // Automatically trigger analysis if file URI is available
+          if (fileUri && updatedSkills) {
+            await analyzeSkills(updatedSkills, fileUri, fileMimeType)
+          }
+        } else {
+          // Set next question
+          setCurrentQuestion(data.nextQuestion)
+        }
+
+        const botMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: "bot",
+          content: data.response || "Answer saved.",
+          timestamp: new Date(),
+        }
+
+        setMessages((prev) => [...prev, botMessage])
+      } catch (error) {
+        console.error("Error:", error)
+        const errorMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: "error",
+          content: "Sorry, I encountered an error saving your answer. Please try again.",
+          timestamp: new Date(),
+        }
+        setMessages((prev) => [...prev, errorMessage])
+        setError("Failed to save answer. Please try again.")
+      } finally {
+        setIsLoading(false)
+      }
+      return
+    }
+
+    // Handle regular message or file upload
     const userMessage: Message = {
       id: Date.now().toString(),
       type: "user",
@@ -201,15 +286,17 @@ export default function ChatBot() {
     }
 
     setMessages((prev) => [...prev, userMessage])
+    const userInput = input
     setInput("")
+    const userFile = file
     setFile(null)
     setIsLoading(true)
 
     try {
       const formData = new FormData()
-      formData.append("message", input || "Please review my resume")
-      if (file) {
-        formData.append("file", file)
+      formData.append("message", userInput || "Please review my resume")
+      if (userFile) {
+        formData.append("file", userFile)
       }
 
       const response = await fetch("/api/chat", {
@@ -231,6 +318,20 @@ export default function ChatBot() {
       }
 
       setMessages((prev) => [...prev, botMessage])
+
+      // Check if skills were returned (resume passed threshold)
+      if (data.skills && data.hasSkills) {
+        setSkills(data.skills)
+        // Store file URI and MIME type for later analysis
+        if (data.fileUri) {
+          setFileUri(data.fileUri)
+        }
+        if (data.fileMimeType) {
+          setFileMimeType(data.fileMimeType)
+        }
+        // Automatically request the first question
+        await getNextQuestion(data.skills)
+      }
     } catch (error) {
       console.error("Error:", error)
       const errorMessage: Message = {
@@ -242,6 +343,138 @@ export default function ChatBot() {
       setMessages((prev) => [...prev, errorMessage])
       setError("Failed to send message. Please try again.")
     } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Function to get the next question
+  const getNextQuestion = async (skillsData?: Record<string, { question: string; answer: string }>) => {
+    const skillsToUse = skillsData || skills
+    if (!skillsToUse) return
+
+    setIsLoading(true)
+    try {
+      const formData = new FormData()
+      formData.append("action", "get_next_question")
+      formData.append("skills", JSON.stringify(skillsToUse))
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+
+      if (data.allAnswered) {
+        setIsAnsweringSkill(false)
+        setCurrentQuestion(null)
+        // Automatically trigger analysis if file URI is available
+        if (fileUri && data.skills) {
+          await analyzeSkills(data.skills, fileUri, fileMimeType)
+        }
+      } else {
+        setIsAnsweringSkill(true)
+        setCurrentQuestion(data.nextQuestion)
+      }
+
+      // Update skills if returned
+      if (data.skills) {
+        setSkills(data.skills)
+      }
+
+      const botMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        type: "bot",
+        content: data.response || "Here's the next question.",
+        timestamp: new Date(),
+      }
+
+      setMessages((prev) => [...prev, botMessage])
+    } catch (error) {
+      console.error("Error getting next question:", error)
+      setError("Failed to get next question. Please try again.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Function to analyze skills
+  const analyzeSkills = async (
+    skillsData: Record<string, { question: string; answer: string }>,
+    resumeFileUri: string,
+    resumeMimeType?: string | null
+  ) => {
+    if (!skillsData || !resumeFileUri) {
+      console.error("Missing skills data or file URI for analysis")
+      return
+    }
+
+    setIsAnalyzing(true)
+    setIsLoading(true)
+
+    // Show analysis start message
+    const analysisStartMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      type: "bot",
+      content: "## 🔍 Analyzing Your Responses\n\nAnalyzing your answers and resume to provide comprehensive feedback. This may take a moment...",
+      timestamp: new Date(),
+    }
+    setMessages((prev) => [...prev, analysisStartMessage])
+
+    try {
+      const formData = new FormData()
+      formData.append("action", "analyze_skills")
+      formData.append("skills", JSON.stringify(skillsData))
+      formData.append("fileUri", resumeFileUri)
+      if (resumeMimeType) {
+        formData.append("fileMimeType", resumeMimeType)
+      }
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+
+      if (data.error) {
+        throw new Error(data.error)
+      }
+
+      // Update skills if returned
+      if (data.skills) {
+        setSkills(data.skills)
+      }
+
+      // Display analysis results
+      const analysisMessage: Message = {
+        id: (Date.now() + 2).toString(),
+        type: "bot",
+        content: data.response || "Analysis complete.",
+        timestamp: new Date(),
+      }
+
+      setMessages((prev) => [...prev, analysisMessage])
+    } catch (error) {
+      console.error("Error analyzing skills:", error)
+      const errorMessage: Message = {
+        id: (Date.now() + 2).toString(),
+        type: "error",
+        content: "Sorry, I encountered an error while analyzing your skills. Please try again.",
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, errorMessage])
+      setError("Failed to analyze skills. Please try again.")
+    } finally {
+      setIsAnalyzing(false)
       setIsLoading(false)
     }
   }
@@ -284,6 +517,12 @@ export default function ChatBot() {
     setFile(null)
     setError(null)
     setIsLoading(false)
+    setSkills(null)
+    setCurrentQuestion(null)
+    setIsAnsweringSkill(false)
+    setFileUri(null)
+    setFileMimeType(null)
+    setIsAnalyzing(false)
     // Reset file input if it exists
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
@@ -450,9 +689,9 @@ export default function ChatBot() {
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isLoading}
+                disabled={isLoading || isAnsweringSkill}
                 className="p-2 hover:bg-card rounded transition text-muted-foreground hover:text-foreground disabled:opacity-50"
-                title="Upload resume"
+                title={isAnsweringSkill ? "File upload disabled during Q&A" : "Upload resume"}
               >
                 <Upload size={20} />
               </button>
@@ -461,7 +700,11 @@ export default function ChatBot() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={(e) => e.key === "Enter" && !isLoading && handleSendMessage()}
-                placeholder="Ask about programs, resume review, or careers..."
+                placeholder={
+                  isAnsweringSkill && currentQuestion
+                    ? `Answer the question about ${currentQuestion.name}...`
+                    : "Ask about programs, resume review, or careers..."
+                }
                 disabled={isLoading}
                 className="flex-1 px-3 py-2 bg-card border border-border rounded text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
               />
