@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useRef, useEffect } from "react"
-import { MessageCircle, X, Send, Upload, Loader2, AlertCircle, RotateCcw } from "lucide-react"
+import { MessageCircle, X, Send, Upload, Loader2, AlertCircle, RotateCcw, Maximize2, Minimize2 } from "lucide-react"
 
 interface Message {
   id: string
@@ -119,6 +119,8 @@ function renderInlineFormatting(text: string) {
 
 export default function ChatBot() {
   const [isOpen, setIsOpen] = useState(false)
+  const [isMaximized, setIsMaximized] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
@@ -135,6 +137,35 @@ export default function ChatBot() {
   const [isScrolled, setIsScrolled] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Check if device is mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      const nowMobile = window.innerWidth < 768 // 768px is typical tablet breakpoint
+      setIsMobile((prevMobile) => {
+        // Auto-maximize if switching to mobile while chat is open
+        if (isOpen && nowMobile && !prevMobile) {
+          setIsMaximized(true)
+        }
+        return nowMobile
+      })
+    }
+
+    checkMobile()
+    window.addEventListener("resize", checkMobile)
+
+    return () => window.removeEventListener("resize", checkMobile)
+  }, [isOpen])
+
+  // Auto-maximize on mobile when opening
+  useEffect(() => {
+    if (isOpen && isMobile) {
+      setIsMaximized(true)
+    } else if (!isOpen) {
+      // Reset maximize state when closing (will be set again on mobile when reopening)
+      setIsMaximized(false)
+    }
+  }, [isOpen, isMobile])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -285,9 +316,15 @@ export default function ChatBot() {
 
       {/* Chat Window */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 w-96 max-h-[600px] bg-background border border-border rounded-lg shadow-2xl flex flex-col z-50">
+        <div
+          className={`fixed bg-background border border-border shadow-2xl flex flex-col z-50 transition-all duration-300 ${
+            isMaximized
+              ? "inset-0 rounded-none"
+              : "bottom-6 right-6 w-96 max-h-[600px] rounded-lg"
+          }`}
+        >
           {/* Header */}
-          <div className="bg-primary text-primary-foreground p-4 rounded-t-lg flex justify-between items-center shrink-0">
+          <div className={`bg-primary text-primary-foreground p-4 flex justify-between items-center shrink-0 ${isMaximized ? "rounded-none" : "rounded-t-lg"}`}>
             <div>
               <h3 className="font-bold">Resume Review Assistant</h3>
               <p className="text-xs text-primary-foreground/80">Powered by BBDITM</p>
@@ -302,8 +339,21 @@ export default function ChatBot() {
               >
                 <RotateCcw size={20} />
               </button>
+              {!isMobile && (
+                <button
+                  onClick={() => setIsMaximized(!isMaximized)}
+                  className="p-1 hover:bg-primary/80 rounded transition"
+                  aria-label={isMaximized ? "Minimize chat" : "Maximize chat"}
+                  title={isMaximized ? "Minimize chat" : "Maximize chat"}
+                >
+                  {isMaximized ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
+                </button>
+              )}
               <button
-                onClick={() => setIsOpen(false)}
+                onClick={() => {
+                  setIsOpen(false)
+                  setIsMaximized(false)
+                }}
                 className="p-1 hover:bg-primary/80 rounded transition"
                 aria-label="Close chat"
               >
@@ -313,11 +363,11 @@ export default function ChatBot() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${isMaximized ? "max-h-[calc(100vh-200px)]" : ""}`}>
             {messages.map((message) => (
               <div key={message.id} className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-xs px-4 py-2 rounded-lg ${
+                  className={`${isMaximized ? "max-w-2xl" : "max-w-xs"} px-4 py-2 rounded-lg ${
                     message.type === "user"
                       ? "bg-primary text-primary-foreground rounded-br-none"
                       : message.type === "error"
