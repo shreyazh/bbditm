@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useRef, useEffect } from "react"
-import { MessageCircle, X, Send, Upload, Loader2, AlertCircle } from "lucide-react"
+import { MessageCircle, X, Send, Upload, Loader2, AlertCircle, RotateCcw } from "lucide-react"
 
 interface Message {
   id: string
@@ -124,7 +124,7 @@ export default function ChatBot() {
       id: "1",
       type: "bot",
       content:
-        "Hello! I'm the BBDITM Resume Review Assistant. I can help you review your resume, answer questions about our programs, and provide career guidance. You can upload your resume or ask me questions directly.",
+        "Hello! I'm the BBDITM Resume Review Assistant. I can help you review your resume. Kindly upload your resume with the job description for the job you are applying for and I will review it and provide you with a detailed analysis of your resume.",
       timestamp: new Date(),
     },
   ])
@@ -225,6 +225,27 @@ export default function ChatBot() {
     }
   }
 
+  const handleRestart = () => {
+    // Reset all state to initial values
+    setMessages([
+      {
+        id: "1",
+        type: "bot",
+        content:
+          "Hello! I'm the BBDITM Resume Review Assistant. I can help you review your resume. Kindly upload your resume with the job description for the job you are applying for and I will review it and provide you with a detailed analysis of your resume.",
+        timestamp: new Date(),
+      },
+    ])
+    setInput("")
+    setFile(null)
+    setError(null)
+    setIsLoading(false)
+    // Reset file input if it exists
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
+    }
+  }
+
   const quickQuestions = [
     "Tell me about B.Tech programs",
     "What are the admission requirements?",
@@ -249,18 +270,29 @@ export default function ChatBot() {
       {isOpen && (
         <div className="fixed bottom-6 right-6 w-96 max-h-[600px] bg-background border border-border rounded-lg shadow-2xl flex flex-col z-50">
           {/* Header */}
-          <div className="bg-primary text-primary-foreground p-4 rounded-t-lg flex justify-between items-center flex-shrink-0">
+          <div className="bg-primary text-primary-foreground p-4 rounded-t-lg flex justify-between items-center shrink-0">
             <div>
               <h3 className="font-bold">Resume Review Assistant</h3>
               <p className="text-xs text-primary-foreground/80">Powered by BBDITM</p>
             </div>
-            <button
-              onClick={() => setIsOpen(false)}
-              className="p-1 hover:bg-primary/80 rounded transition"
-              aria-label="Close chat"
-            >
-              <X size={20} />
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleRestart}
+                className="p-1 hover:bg-primary/80 rounded transition"
+                aria-label="Restart session"
+                title="Restart session"
+                disabled={isLoading}
+              >
+                <RotateCcw size={20} />
+              </button>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="p-1 hover:bg-primary/80 rounded transition"
+                aria-label="Close chat"
+              >
+                <X size={20} />
+              </button>
+            </div>
           </div>
 
           {/* Messages */}
@@ -334,13 +366,13 @@ export default function ChatBot() {
           {/* Error Display */}
           {error && (
             <div className="px-4 py-2 bg-destructive/10 border-t border-destructive/20 flex items-center gap-2">
-              <AlertCircle size={16} className="text-destructive flex-shrink-0" />
+              <AlertCircle size={16} className="text-destructive shrink-0" />
               <span className="text-xs text-destructive">{error}</span>
             </div>
           )}
 
           {/* Input Area */}
-          <div className="border-t border-border p-4 space-y-3 flex-shrink-0">
+          <div className="border-t border-border p-4 space-y-3 shrink-0">
             <div className="flex gap-2">
               <input
                 type="file"
