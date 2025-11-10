@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useRef, useEffect } from "react"
-import { MessageCircle, X, Send, Upload, Loader2, AlertCircle } from "lucide-react"
+import { MessageCircle, X, Send, Upload, Loader2, AlertCircle, RotateCcw, Maximize2, Minimize2 } from "lucide-react"
 
 interface Message {
   id: string
@@ -11,6 +11,7 @@ interface Message {
   content: string
   timestamp: Date
   fileName?: string
+  timeTaken?: number // Response time in milliseconds (only for skill question answers)
 }
 
 function renderFormattedContent(content: string) {
@@ -19,32 +20,10 @@ function renderFormattedContent(content: string) {
   let currentList: string[] = []
 
   lines.forEach((line, index) => {
-    // Handle section headers
-    if (line.startsWith("## ")) {
-      if (currentList.length > 0) {
-        elements.push(
-          <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
-            {currentList.map((item, i) => (
-              <li key={i} className="text-sm">
-                {item}
-              </li>
-            ))}
-          </ul>,
-        )
-        currentList = []
-      }
-      elements.push(
-        <h3 key={index} className="font-bold text-base mt-3 mb-2">
-          {line.replace("## ", "")}
-        </h3>,
-      )
-    }
-    // Handle bullet points
-    else if (line.startsWith("- ")) {
-      currentList.push(line.replace("- ", ""))
-    }
-    // Handle bold text and regular paragraphs
-    else if (line.trim()) {
+    const trimmedLine = line.trim()
+
+    // Handle horizontal rules
+    if (trimmedLine === "---" || trimmedLine.startsWith("---")) {
       if (currentList.length > 0) {
         elements.push(
           <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
@@ -58,11 +37,73 @@ function renderFormattedContent(content: string) {
         currentList = []
       }
       elements.push(
-        <p key={index} className="text-sm mb-2">
-          {renderInlineFormatting(line)}
+        <hr key={`hr-${index}`} className="my-4 border-border" />
+      )
+    }
+    // Handle h3 headers (### ) - check before h2 to avoid conflicts
+    else if (trimmedLine.startsWith("### ")) {
+      if (currentList.length > 0) {
+        elements.push(
+          <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
+            {currentList.map((item, i) => (
+              <li key={i} className="text-sm">
+                {renderInlineFormatting(item)}
+              </li>
+            ))}
+          </ul>,
+        )
+        currentList = []
+      }
+      elements.push(
+        <h3 key={`h3-${index}`} className="font-bold text-base mt-3 mb-2">
+          {renderInlineFormatting(trimmedLine.replace("### ", ""))}
+        </h3>,
+      )
+    }
+    // Handle h2 headers (## ) - check after h3
+    else if (trimmedLine.startsWith("## ")) {
+      if (currentList.length > 0) {
+        elements.push(
+          <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
+            {currentList.map((item, i) => (
+              <li key={i} className="text-sm">
+                {renderInlineFormatting(item)}
+              </li>
+            ))}
+          </ul>,
+        )
+        currentList = []
+      }
+      elements.push(
+        <h2 key={`h2-${index}`} className="font-bold text-lg mt-4 mb-3">
+          {renderInlineFormatting(trimmedLine.replace("## ", ""))}
+        </h2>,
+      )
+    }
+    // Handle bullet points
+    else if (trimmedLine.startsWith("- ")) {
+      currentList.push(trimmedLine.replace("- ", ""))
+    }
+    // Handle regular paragraphs
+    else if (trimmedLine) {
+      if (currentList.length > 0) {
+        elements.push(
+          <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
+            {currentList.map((item, i) => (
+              <li key={i} className="text-sm">
+                {renderInlineFormatting(item)}
+              </li>
+            ))}
+          </ul>,
+        )
+        currentList = []
+      }
+      elements.push(
+        <p key={`p-${index}`} className="text-sm mb-2">
+          {renderInlineFormatting(trimmedLine)}
         </p>,
       )
-    } else if (line.trim() === "" && currentList.length > 0) {
+    } else if (!trimmedLine && currentList.length > 0) {
       elements.push(
         <ul key={`list-${index}`} className="list-disc list-inside mb-3 space-y-1">
           {currentList.map((item, i) => (
@@ -92,39 +133,121 @@ function renderFormattedContent(content: string) {
   return elements
 }
 
-function renderInlineFormatting(text: string) {
+function renderInlineFormatting(text: string): React.ReactNode {
   const parts: React.ReactNode[] = []
   let lastIndex = 0
+  let keyCounter = 0
+  
+  // Find all formatting markers (bold and italic)
+  const markers: Array<{ index: number; type: 'bold' | 'italic'; content: string; length: number }> = []
+  
+  // First, find all bold markers (**text**)
   const boldRegex = /\*\*(.*?)\*\*/g
   let match
-
   while ((match = boldRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(text.substring(lastIndex, match.index))
-    }
-    parts.push(
-      <strong key={match.index} className="font-semibold">
-        {match[1]}
-      </strong>,
-    )
-    lastIndex = match.index + match[0].length
+    markers.push({
+      index: match.index,
+      type: 'bold',
+      content: match[1],
+      length: match[0].length
+    })
   }
-
+  
+  // Then find italic markers (*text*) - but exclude those that are part of **
+  // Check each potential italic marker to see if it's actually part of a bold marker
+  const italicRegex = /\*([^*\n]+?)\*/g
+  while ((match = italicRegex.exec(text)) !== null) {
+    const matchStart = match.index
+    const matchEnd = match.index + match[0].length
+    
+    // Check if this match is inside or overlaps with any bold marker
+    const isInsideBold = markers.some(m => {
+      if (m.type !== 'bold') return false
+      const boldStart = m.index
+      const boldEnd = m.index + m.length
+      // Check if italic marker is completely inside bold, or if it's the asterisks of bold
+      return (matchStart >= boldStart - 1 && matchEnd <= boldEnd + 1)
+    })
+    
+    // Also check if the characters before/after are asterisks (meaning it's part of **)
+    const charBefore = matchStart > 0 ? text[matchStart - 1] : ''
+    const charAfter = matchEnd < text.length ? text[matchEnd] : ''
+    const isPartOfBold = charBefore === '*' || charAfter === '*'
+    
+    if (!isInsideBold && !isPartOfBold) {
+      markers.push({
+        index: match.index,
+        type: 'italic',
+        content: match[1],
+        length: match[0].length
+      })
+    }
+  }
+  
+  // Sort markers by index to process in order
+  markers.sort((a, b) => a.index - b.index)
+  
+  // Remove overlapping markers (italic inside bold, etc.)
+  const filteredMarkers: typeof markers = []
+  markers.forEach((marker, i) => {
+    const overlaps = filteredMarkers.some(fm => {
+      const markerEnd = marker.index + marker.length
+      const fmEnd = fm.index + fm.length
+      return (marker.index >= fm.index && marker.index < fmEnd) ||
+             (markerEnd > fm.index && markerEnd <= fmEnd) ||
+             (marker.index <= fm.index && markerEnd >= fmEnd)
+    })
+    if (!overlaps) {
+      filteredMarkers.push(marker)
+    }
+  })
+  
+  // Build the result by processing markers in order
+  filteredMarkers.forEach((marker) => {
+    // Add text before this marker
+    if (marker.index > lastIndex) {
+      const beforeText = text.substring(lastIndex, marker.index)
+      if (beforeText) {
+        parts.push(beforeText)
+      }
+    }
+    
+    // Add the formatted content
+    if (marker.type === 'bold') {
+      parts.push(
+        <strong key={`bold-${keyCounter++}`} className="font-semibold">
+          {marker.content}
+        </strong>
+      )
+    } else {
+      parts.push(
+        <em key={`italic-${keyCounter++}`} className="italic">
+          {marker.content}
+        </em>
+      )
+    }
+    
+    lastIndex = marker.index + marker.length
+  })
+  
+  // Add remaining text after the last marker
   if (lastIndex < text.length) {
     parts.push(text.substring(lastIndex))
   }
-
-  return parts.length > 0 ? parts : text
+  
+  return parts.length > 0 ? <>{parts}</> : text
 }
 
 export default function ChatBot() {
   const [isOpen, setIsOpen] = useState(false)
+  const [isMaximized, setIsMaximized] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
       type: "bot",
       content:
-        "Hello! I'm the BBDITM Resume Review Assistant. I can help you review your resume, answer questions about our programs, and provide career guidance. You can upload your resume or ask me questions directly.",
+        "Hello! I'm the BBDITM Resume Review Assistant. I can help you review your resume. Kindly upload your resume with the job description for the job you are applying for and I will review it and provide you with a detailed analysis of your resume.",
       timestamp: new Date(),
     },
   ])
@@ -132,8 +255,57 @@ export default function ChatBot() {
   const [isLoading, setIsLoading] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [isScrolled, setIsScrolled] = useState(false)
+  const [skills, setSkills] = useState<Record<string, { question: string; answer: string; timeTaken?: number }> | null>(null)
+  const [currentQuestion, setCurrentQuestion] = useState<{ name: string; question: string } | null>(null)
+  const [isAnsweringSkill, setIsAnsweringSkill] = useState(false)
+  const [fileUri, setFileUri] = useState<string | null>(null)
+  const [fileMimeType, setFileMimeType] = useState<string | null>(null)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [questionStartTime, setQuestionStartTime] = useState<number | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Check if device is mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      const nowMobile = window.innerWidth < 768 // 768px is typical tablet breakpoint
+      setIsMobile((prevMobile) => {
+        // Auto-maximize if switching to mobile while chat is open
+        if (isOpen && nowMobile && !prevMobile) {
+          setIsMaximized(true)
+        }
+        return nowMobile
+      })
+    }
+
+    checkMobile()
+    window.addEventListener("resize", checkMobile)
+
+    return () => window.removeEventListener("resize", checkMobile)
+  }, [isOpen])
+
+  // Auto-maximize on mobile when opening
+  useEffect(() => {
+    if (isOpen && isMobile) {
+      setIsMaximized(true)
+    } else if (!isOpen) {
+      // Reset maximize state when closing (will be set again on mobile when reopening)
+      setIsMaximized(false)
+    }
+  }, [isOpen, isMobile])
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const scrollPosition = window.scrollY
+      setIsScrolled(scrollPosition > 50)
+    }
+
+    window.addEventListener("scroll", handleScroll, { passive: true })
+    handleScroll()
+
+    return () => window.removeEventListener("scroll", handleScroll)
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -143,11 +315,116 @@ export default function ChatBot() {
     scrollToBottom()
   }, [messages])
 
+  // Start timer when a new question is displayed
+  useEffect(() => {
+    if (currentQuestion && isAnsweringSkill) {
+      setQuestionStartTime(Date.now())
+    } else if (!currentQuestion) {
+      setQuestionStartTime(null)
+    }
+  }, [currentQuestion, isAnsweringSkill])
+
   const handleSendMessage = async () => {
     if (!input.trim() && !file) return
 
     setError(null)
 
+    // Handle skill answer submission
+    if (isAnsweringSkill && currentQuestion && input.trim()) {
+      // Calculate time taken
+      const timeTaken = questionStartTime ? Date.now() - questionStartTime : 0
+      
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        type: "user",
+        content: input,
+        timestamp: new Date(),
+        timeTaken: timeTaken, // Store time taken for skill question answers
+      }
+
+      setMessages((prev) => [...prev, userMessage])
+      const answer = input
+      setInput("")
+      setIsLoading(true)
+
+      // Update skills with answer and timeTaken before sending to API
+      const updatedSkillsForSubmission = skills ? { ...skills } : null
+      if (updatedSkillsForSubmission && currentQuestion.name in updatedSkillsForSubmission) {
+        updatedSkillsForSubmission[currentQuestion.name] = {
+          ...updatedSkillsForSubmission[currentQuestion.name],
+          answer: answer,
+          timeTaken: timeTaken,
+        }
+      }
+
+      try {
+        const formData = new FormData()
+        formData.append("action", "submit_skill_answer")
+        formData.append("skills", JSON.stringify(updatedSkillsForSubmission || skills))
+        formData.append("skillAnswer", JSON.stringify({ skillName: currentQuestion.name, answer: answer, timeTaken: timeTaken }))
+
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          body: formData,
+        })
+
+        if (!response.ok) {
+          throw new Error(`API error: ${response.statusText}`)
+        }
+
+        const data = await response.json()
+
+        // Update skills state
+        if (data.skills) {
+          setSkills(data.skills)
+        }
+
+        // Reset timer
+        setQuestionStartTime(null)
+
+        // If all answered, trigger analysis
+        if (data.allAnswered) {
+          setIsAnsweringSkill(false)
+          setCurrentQuestion(null)
+          // Update skills first, then trigger analysis
+          const updatedSkills = data.skills || updatedSkillsForSubmission || skills
+          if (updatedSkills) {
+            setSkills(updatedSkills)
+          }
+          // Automatically trigger analysis if file URI is available
+          if (fileUri && updatedSkills) {
+            await analyzeSkills(updatedSkills, fileUri, fileMimeType)
+          }
+        } else {
+          // Set next question (timer will start automatically via useEffect)
+          setCurrentQuestion(data.nextQuestion)
+        }
+
+        const botMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: "bot",
+          content: data.response || "Answer saved.",
+          timestamp: new Date(),
+        }
+
+        setMessages((prev) => [...prev, botMessage])
+      } catch (error) {
+        console.error("Error:", error)
+        const errorMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          type: "error",
+          content: "Sorry, I encountered an error saving your answer. Please try again.",
+          timestamp: new Date(),
+        }
+        setMessages((prev) => [...prev, errorMessage])
+        setError("Failed to save answer. Please try again.")
+      } finally {
+        setIsLoading(false)
+      }
+      return
+    }
+
+    // Handle regular message or file upload
     const userMessage: Message = {
       id: Date.now().toString(),
       type: "user",
@@ -157,15 +434,17 @@ export default function ChatBot() {
     }
 
     setMessages((prev) => [...prev, userMessage])
+    const userInput = input
     setInput("")
+    const userFile = file
     setFile(null)
     setIsLoading(true)
 
     try {
       const formData = new FormData()
-      formData.append("message", input || "Please review my resume")
-      if (file) {
-        formData.append("file", file)
+      formData.append("message", userInput || "Please review my resume")
+      if (userFile) {
+        formData.append("file", userFile)
       }
 
       const response = await fetch("/api/chat", {
@@ -187,6 +466,20 @@ export default function ChatBot() {
       }
 
       setMessages((prev) => [...prev, botMessage])
+
+      // Check if skills were returned (resume passed threshold)
+      if (data.skills && data.hasSkills) {
+        setSkills(data.skills)
+        // Store file URI and MIME type for later analysis
+        if (data.fileUri) {
+          setFileUri(data.fileUri)
+        }
+        if (data.fileMimeType) {
+          setFileMimeType(data.fileMimeType)
+        }
+        // Automatically request the first question
+        await getNextQuestion(data.skills)
+      }
     } catch (error) {
       console.error("Error:", error)
       const errorMessage: Message = {
@@ -198,6 +491,140 @@ export default function ChatBot() {
       setMessages((prev) => [...prev, errorMessage])
       setError("Failed to send message. Please try again.")
     } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Function to get the next question
+  const getNextQuestion = async (skillsData?: Record<string, { question: string; answer: string; timeTaken?: number }>) => {
+    const skillsToUse = skillsData || skills
+    if (!skillsToUse) return
+
+    setIsLoading(true)
+    try {
+      const formData = new FormData()
+      formData.append("action", "get_next_question")
+      formData.append("skills", JSON.stringify(skillsToUse))
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+
+      if (data.allAnswered) {
+        setIsAnsweringSkill(false)
+        setCurrentQuestion(null)
+        setQuestionStartTime(null)
+        // Automatically trigger analysis if file URI is available
+        if (fileUri && data.skills) {
+          await analyzeSkills(data.skills, fileUri, fileMimeType)
+        }
+      } else {
+        setIsAnsweringSkill(true)
+        // Timer will start automatically via useEffect when currentQuestion is set
+        setCurrentQuestion(data.nextQuestion)
+      }
+
+      // Update skills if returned
+      if (data.skills) {
+        setSkills(data.skills)
+      }
+
+      const botMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        type: "bot",
+        content: data.response || "Here's the next question.",
+        timestamp: new Date(),
+      }
+
+      setMessages((prev) => [...prev, botMessage])
+    } catch (error) {
+      console.error("Error getting next question:", error)
+      setError("Failed to get next question. Please try again.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Function to analyze skills
+  const analyzeSkills = async (
+    skillsData: Record<string, { question: string; answer: string; timeTaken?: number }>,
+    resumeFileUri: string,
+    resumeMimeType?: string | null
+  ) => {
+    if (!skillsData || !resumeFileUri) {
+      console.error("Missing skills data or file URI for analysis")
+      return
+    }
+
+    setIsAnalyzing(true)
+    setIsLoading(true)
+
+    // Show analysis start message
+    const analysisStartMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      type: "bot",
+      content: "## 🔍 Analyzing Your Responses\n\nAnalyzing your answers and resume to provide comprehensive feedback. This may take a moment...",
+      timestamp: new Date(),
+    }
+    setMessages((prev) => [...prev, analysisStartMessage])
+
+    try {
+      const formData = new FormData()
+      formData.append("action", "analyze_skills")
+      formData.append("skills", JSON.stringify(skillsData))
+      formData.append("fileUri", resumeFileUri)
+      if (resumeMimeType) {
+        formData.append("fileMimeType", resumeMimeType)
+      }
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+
+      if (data.error) {
+        throw new Error(data.error)
+      }
+
+      // Update skills if returned
+      if (data.skills) {
+        setSkills(data.skills)
+      }
+
+      // Display analysis results
+      const analysisMessage: Message = {
+        id: (Date.now() + 2).toString(),
+        type: "bot",
+        content: data.response || "Analysis complete.",
+        timestamp: new Date(),
+      }
+
+      setMessages((prev) => [...prev, analysisMessage])
+    } catch (error) {
+      console.error("Error analyzing skills:", error)
+      const errorMessage: Message = {
+        id: (Date.now() + 2).toString(),
+        type: "error",
+        content: "Sorry, I encountered an error while analyzing your skills. Please try again.",
+        timestamp: new Date(),
+      }
+      setMessages((prev) => [...prev, errorMessage])
+      setError("Failed to analyze skills. Please try again.")
+    } finally {
+      setIsAnalyzing(false)
       setIsLoading(false)
     }
   }
@@ -225,6 +652,34 @@ export default function ChatBot() {
     }
   }
 
+  const handleRestart = () => {
+    // Reset all state to initial values
+    setMessages([
+      {
+        id: "1",
+        type: "bot",
+        content:
+          "Hello! I'm the BBDITM Resume Review Assistant. I can help you review your resume. Kindly upload your resume with the job description for the job you are applying for and I will review it and provide you with a detailed analysis of your resume.",
+        timestamp: new Date(),
+      },
+    ])
+    setInput("")
+    setFile(null)
+    setError(null)
+    setIsLoading(false)
+    setSkills(null)
+    setCurrentQuestion(null)
+    setIsAnsweringSkill(false)
+    setFileUri(null)
+    setFileMimeType(null)
+    setIsAnalyzing(false)
+    setQuestionStartTime(null)
+    // Reset file input if it exists
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
+    }
+  }
+
   const quickQuestions = [
     "Tell me about B.Tech programs",
     "What are the admission requirements?",
@@ -238,7 +693,11 @@ export default function ChatBot() {
       {!isOpen && (
         <button
           onClick={() => setIsOpen(true)}
-          className="fixed bottom-6 right-6 w-14 h-14 bg-primary text-primary-foreground rounded-full shadow-lg hover:bg-primary/90 transition flex items-center justify-center z-40"
+          className={`fixed bottom-6 right-6 w-14 h-14 rounded-full shadow-lg transition flex items-center justify-center z-40 ${
+            isScrolled
+              ? "bg-primary text-primary-foreground hover:bg-primary/90"
+              : "bg-white text-primary hover:bg-white/90"
+          }`}
           aria-label="Open chat"
         >
           <MessageCircle size={24} />
@@ -247,28 +706,58 @@ export default function ChatBot() {
 
       {/* Chat Window */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 w-96 max-h-[600px] bg-background border border-border rounded-lg shadow-2xl flex flex-col z-50">
+        <div
+          className={`fixed bg-background border border-border shadow-2xl flex flex-col z-50 transition-all duration-300 ${
+            isMaximized
+              ? "inset-0 rounded-none"
+              : "bottom-6 right-6 w-96 max-h-[600px] rounded-lg"
+          }`}
+        >
           {/* Header */}
-          <div className="bg-primary text-primary-foreground p-4 rounded-t-lg flex justify-between items-center flex-shrink-0">
+          <div className={`bg-primary text-primary-foreground p-4 flex justify-between items-center shrink-0 ${isMaximized ? "rounded-none" : "rounded-t-lg"}`}>
             <div>
               <h3 className="font-bold">Resume Review Assistant</h3>
               <p className="text-xs text-primary-foreground/80">Powered by BBDITM</p>
             </div>
-            <button
-              onClick={() => setIsOpen(false)}
-              className="p-1 hover:bg-primary/80 rounded transition"
-              aria-label="Close chat"
-            >
-              <X size={20} />
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleRestart}
+                className="p-1 hover:bg-primary/80 rounded transition"
+                aria-label="Restart session"
+                title="Restart session"
+                disabled={isLoading}
+              >
+                <RotateCcw size={20} />
+              </button>
+              {!isMobile && (
+                <button
+                  onClick={() => setIsMaximized(!isMaximized)}
+                  className="p-1 hover:bg-primary/80 rounded transition"
+                  aria-label={isMaximized ? "Minimize chat" : "Maximize chat"}
+                  title={isMaximized ? "Minimize chat" : "Maximize chat"}
+                >
+                  {isMaximized ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  setIsOpen(false)
+                  setIsMaximized(false)
+                }}
+                className="p-1 hover:bg-primary/80 rounded transition"
+                aria-label="Close chat"
+              >
+                <X size={20} />
+              </button>
+            </div>
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${isMaximized ? "max-h-[calc(100vh-200px)]" : ""}`}>
             {messages.map((message) => (
               <div key={message.id} className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-xs px-4 py-2 rounded-lg ${
+                  className={`${isMaximized ? "max-w-2xl" : "max-w-xs"} px-4 py-2 rounded-lg ${
                     message.type === "user"
                       ? "bg-primary text-primary-foreground rounded-br-none"
                       : message.type === "error"
@@ -282,9 +771,16 @@ export default function ChatBot() {
                   ) : (
                     <p className="text-sm">{message.content}</p>
                   )}
-                  <p className="text-xs mt-1 opacity-70">
-                    {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </p>
+                  <div className="flex flex-col gap-1 mt-1">
+                    <p className="text-xs opacity-70">
+                      {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </p>
+                    {message.type === "user" && message.timeTaken !== undefined && (
+                      <p className="text-xs opacity-60 italic">
+                        Time taken: {(message.timeTaken / 1000).toFixed(2)}s
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -334,13 +830,13 @@ export default function ChatBot() {
           {/* Error Display */}
           {error && (
             <div className="px-4 py-2 bg-destructive/10 border-t border-destructive/20 flex items-center gap-2">
-              <AlertCircle size={16} className="text-destructive flex-shrink-0" />
+              <AlertCircle size={16} className="text-destructive shrink-0" />
               <span className="text-xs text-destructive">{error}</span>
             </div>
           )}
 
           {/* Input Area */}
-          <div className="border-t border-border p-4 space-y-3 flex-shrink-0">
+          <div className="border-t border-border p-4 space-y-3 shrink-0">
             <div className="flex gap-2">
               <input
                 type="file"
@@ -351,9 +847,9 @@ export default function ChatBot() {
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isLoading}
+                disabled={isLoading || isAnsweringSkill}
                 className="p-2 hover:bg-card rounded transition text-muted-foreground hover:text-foreground disabled:opacity-50"
-                title="Upload resume"
+                title={isAnsweringSkill ? "File upload disabled during Q&A" : "Upload resume"}
               >
                 <Upload size={20} />
               </button>
@@ -362,7 +858,11 @@ export default function ChatBot() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={(e) => e.key === "Enter" && !isLoading && handleSendMessage()}
-                placeholder="Ask about programs, resume review, or careers..."
+                placeholder={
+                  isAnsweringSkill && currentQuestion
+                    ? `Answer the question about ${currentQuestion.name}...`
+                    : "Ask about programs, resume review, or careers..."
+                }
                 disabled={isLoading}
                 className="flex-1 px-3 py-2 bg-card border border-border rounded text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
               />
