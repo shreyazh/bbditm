@@ -5,6 +5,71 @@ import { type NextRequest, NextResponse } from "next/server"
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "")
 const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY || "")
 
+/**
+ * Robustly extracts JSON from a response string that may contain:
+ * - Markdown code blocks (```json or ```)
+ * - Preamble text before JSON
+ * - Trailing text after JSON
+ * - Pure JSON
+ */
+function extractJSON(response: string): string | null {
+  if (!response || typeof response !== "string") {
+    return null
+  }
+
+  let jsonString = response.trim()
+
+  // First, try to extract from markdown code blocks
+  const jsonBlockMatch = jsonString.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
+  if (jsonBlockMatch) {
+    jsonString = jsonBlockMatch[1].trim()
+    try {
+      JSON.parse(jsonString)
+      return jsonString
+    } catch {
+      // Continue to other methods if markdown extraction fails
+    }
+  }
+
+  // Try to find JSON object by finding first { and matching closing }
+  let braceCount = 0
+  let startIndex = -1
+  let endIndex = -1
+
+  for (let i = 0; i < jsonString.length; i++) {
+    if (jsonString[i] === "{") {
+      if (startIndex === -1) {
+        startIndex = i
+      }
+      braceCount++
+    } else if (jsonString[i] === "}") {
+      braceCount--
+      if (braceCount === 0 && startIndex !== -1) {
+        endIndex = i
+        break
+      }
+    }
+  }
+
+  if (startIndex !== -1 && endIndex !== -1) {
+    const extracted = jsonString.substring(startIndex, endIndex + 1)
+    try {
+      JSON.parse(extracted)
+      return extracted
+    } catch {
+      // Continue to try parsing the whole string
+    }
+  }
+
+  // Last resort: try parsing the whole string (might be pure JSON)
+  try {
+    JSON.parse(jsonString)
+    return jsonString
+  } catch {
+    return null
+  }
+}
+
 const systemPrompt = `You are a state-of-the-art Applicant Tracking System (ATS) simulator combined with the critical eye of a senior technical recruiter.
 
 Your task is to perform a strict, critical analysis of the attached resume file against the provided job description. You must score the resume based on semantic relevance, skills, and experience—not just keyword-stuffing.
@@ -429,12 +494,10 @@ Return your analysis in the exact JSON format specified in the system prompt.`
         const analysisResult = await analysisChat.sendMessage(analysisParts)
         const analysisResponse = analysisResult.response.text()
 
-        // Parse analysis JSON response
-        let analysisJsonString = analysisResponse.trim()
-        if (analysisJsonString.startsWith("```json")) {
-          analysisJsonString = analysisJsonString.replace(/^```json\s*/, "").replace(/\s*```$/, "")
-        } else if (analysisJsonString.startsWith("```")) {
-          analysisJsonString = analysisJsonString.replace(/^```\s*/, "").replace(/\s*```$/, "")
+        // Parse analysis JSON response using robust extraction
+        const analysisJsonString = extractJSON(analysisResponse)
+        if (!analysisJsonString) {
+          throw new Error("Failed to extract JSON from analysis response")
         }
 
         const analysisData = JSON.parse(analysisJsonString)
@@ -675,14 +738,11 @@ Return your analysis in the exact JSON format specified in the system prompt.`
     const result = await chat.sendMessage(parts)
     const response = result.response.text()
 
-    // Try to parse JSON response from LLM
+    // Try to parse JSON response from LLM using robust extraction
     try {
-      // Remove markdown code blocks if present
-      let jsonString = response.trim()
-      if (jsonString.startsWith("```json")) {
-        jsonString = jsonString.replace(/^```json\s*/, "").replace(/\s*```$/, "")
-      } else if (jsonString.startsWith("```")) {
-        jsonString = jsonString.replace(/^```\s*/, "").replace(/\s*```$/, "")
+      const jsonString = extractJSON(response)
+      if (!jsonString) {
+        throw new Error("No JSON found in response")
       }
 
       const analysisResult = JSON.parse(jsonString)
@@ -754,12 +814,10 @@ ${analysisResult.formatting_issues?.length > 0
               const skillsResult = await skillsChat.sendMessage(skillsParts)
               const skillsResponse = skillsResult.response.text()
 
-              // Parse skills JSON response
-              let skillsJsonString = skillsResponse.trim()
-              if (skillsJsonString.startsWith("```json")) {
-                skillsJsonString = skillsJsonString.replace(/^```json\s*/, "").replace(/\s*```$/, "")
-              } else if (skillsJsonString.startsWith("```")) {
-                skillsJsonString = skillsJsonString.replace(/^```\s*/, "").replace(/\s*```$/, "")
+              // Parse skills JSON response using robust extraction
+              const skillsJsonString = extractJSON(skillsResponse)
+              if (!skillsJsonString) {
+                throw new Error("Failed to extract JSON from skills response")
               }
 
               skillsData = JSON.parse(skillsJsonString)
