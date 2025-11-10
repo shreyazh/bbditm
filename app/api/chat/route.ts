@@ -1,22 +1,86 @@
 import { GoogleGenerativeAI, FileDataPart } from "@google/generative-ai"
 import { GoogleAIFileManager, FileState } from "@google/generative-ai/server"
 import { type NextRequest, NextResponse } from "next/server"
+import mammoth from "mammoth"
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "")
 const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY || "")
+
+/**
+ * Robustly extracts JSON from a response string that may contain:
+ * - Markdown code blocks (```json or ```)
+ * - Preamble text before JSON
+ * - Trailing text after JSON
+ * - Pure JSON
+ */
+function extractJSON(response: string): string | null {
+  if (!response || typeof response !== "string") {
+    return null
+  }
+
+  let jsonString = response.trim()
+
+  // First, try to extract from markdown code blocks
+  const jsonBlockMatch = jsonString.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
+  if (jsonBlockMatch) {
+    jsonString = jsonBlockMatch[1].trim()
+    try {
+      JSON.parse(jsonString)
+      return jsonString
+    } catch {
+      // Continue to other methods if markdown extraction fails
+    }
+  }
+
+  // Try to find JSON object by finding first { and matching closing }
+  let braceCount = 0
+  let startIndex = -1
+  let endIndex = -1
+
+  for (let i = 0; i < jsonString.length; i++) {
+    if (jsonString[i] === "{") {
+      if (startIndex === -1) {
+        startIndex = i
+      }
+      braceCount++
+    } else if (jsonString[i] === "}") {
+      braceCount--
+      if (braceCount === 0 && startIndex !== -1) {
+        endIndex = i
+        break
+      }
+    }
+  }
+
+  if (startIndex !== -1 && endIndex !== -1) {
+    const extracted = jsonString.substring(startIndex, endIndex + 1)
+    try {
+      JSON.parse(extracted)
+      return extracted
+    } catch {
+      // Continue to try parsing the whole string
+    }
+  }
+
+  // Last resort: try parsing the whole string (might be pure JSON)
+  try {
+    JSON.parse(jsonString)
+    return jsonString
+  } catch {
+    return null
+  }
+}
 
 const systemPrompt = `You are a state-of-the-art Applicant Tracking System (ATS) simulator combined with the critical eye of a senior technical recruiter.
 
 Your task is to perform a strict, critical analysis of the attached resume file against the provided job description. You must score the resume based on semantic relevance, skills, and experience—not just keyword-stuffing.
 
-The user has attached one (1) PDF file for the resume.
-The user has also provided the job description as plain text, enclosed in <job_description> tags.
 
 **Input Data:**
 
-<job_description>
-[Your backend will insert the job_description text here]
-</job_description>
+The user has attached one (1) PDF file for the resume.
+
+The user will also provide the job description as plain text.
 
 **Analysis and Response:**
 
@@ -370,9 +434,8 @@ export async function POST(request: NextRequest) {
         console.log("\n=== Starting Skills Analysis ===")
         console.log(`File URI: ${fileUri}`)
         console.log(`Skills to analyze: ${Object.keys(skills).length}`)
-
-        // Create analysis model
-        const analysisModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
+        // Create analysis model - using Gemini 2.5 Pro for comprehensive analysis
+        const analysisModel = genAI.getGenerativeModel({ model: "gemini-2.5-pro" })
         const analysisChat = analysisModel.startChat({
           history: [
             {
@@ -415,7 +478,7 @@ Return your analysis in the exact JSON format specified in the system prompt.`
         // Create file data part using the file URI
         const fileDataPart: FileDataPart = {
           fileData: {
-            mimeType: fileMimeType || "application/pdf", // Use provided MIME type or default to PDF
+            mimeType: fileMimeType || "text/plain", // Use provided MIME type or default to text/plain
             fileUri: fileUri,
           },
         }
@@ -429,12 +492,10 @@ Return your analysis in the exact JSON format specified in the system prompt.`
         const analysisResult = await analysisChat.sendMessage(analysisParts)
         const analysisResponse = analysisResult.response.text()
 
-        // Parse analysis JSON response
-        let analysisJsonString = analysisResponse.trim()
-        if (analysisJsonString.startsWith("```json")) {
-          analysisJsonString = analysisJsonString.replace(/^```json\s*/, "").replace(/\s*```$/, "")
-        } else if (analysisJsonString.startsWith("```")) {
-          analysisJsonString = analysisJsonString.replace(/^```\s*/, "").replace(/\s*```$/, "")
+        // Parse analysis JSON response using robust extraction
+        const analysisJsonString = extractJSON(analysisResponse)
+        if (!analysisJsonString) {
+          throw new Error("Failed to extract JSON from analysis response")
         }
 
         const analysisData = JSON.parse(analysisJsonString)
@@ -579,72 +640,130 @@ Return your analysis in the exact JSON format specified in the system prompt.`
     let fileDataPart: FileDataPart | null = null
     let fileMetadata: any = null
 
-    // Handle file upload - use Gemini's File API for proper PDF processing
+    // Handle file upload
     if (file) {
       const buffer = Buffer.from(await file.arrayBuffer())
+      const fileName = file.name.toLowerCase()
       
-      // Determine MIME type
-      let mimeType = file.type
-      if (!mimeType) {
-        // Fallback MIME type detection based on file extension
-        const fileName = file.name.toLowerCase()
-        if (fileName.endsWith(".pdf")) {
-          mimeType = "application/pdf"
-        } else if (fileName.endsWith(".doc")) {
-          mimeType = "application/msword"
-        } else if (fileName.endsWith(".docx")) {
-          mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        } else if (fileName.endsWith(".txt")) {
-          mimeType = "text/plain"
+      // Handle .docx files: Convert to text using mammoth since Gemini doesn't support .docx directly
+      if (fileName.endsWith(".docx")) {
+        try {
+          // Convert .docx to text using mammoth
+          const result = await mammoth.extractRawText({ buffer: buffer })
+          const docxText = result.value
+          
+          // Create a text buffer from the converted content
+          const textBuffer = Buffer.from(docxText, "utf-8")
+          
+          // Upload as text/plain instead of .docx
+          const uploadResponse = await fileManager.uploadFile(textBuffer, {
+            mimeType: "text/plain",
+            displayName: file.name.replace(/\.docx$/i, ".txt"),
+          })
+
+          // Wait for file processing to complete
+          fileMetadata = uploadResponse.file
+          const maxWaitTime = 30000 // 30 seconds max wait
+          const pollInterval = 1000 // Check every second
+          const startTime = Date.now()
+
+          while (
+            fileMetadata.state === FileState.PROCESSING ||
+            fileMetadata.state === FileState.STATE_UNSPECIFIED
+          ) {
+            if (Date.now() - startTime > maxWaitTime) {
+              throw new Error("File processing timeout. Please try again.")
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, pollInterval))
+            fileMetadata = await fileManager.getFile(fileMetadata.name)
+          }
+
+          if (fileMetadata.state === FileState.FAILED) {
+            throw new Error(
+              fileMetadata.error?.message || "File processing failed. Please check the file format."
+            )
+          }
+
+          // Create file data part using the uploaded text file URI
+          fileDataPart = {
+            fileData: {
+              mimeType: "text/plain",
+              fileUri: fileMetadata.uri,
+            },
+          }
+          parts.push(fileDataPart)
+        } catch (docxError: any) {
+          console.error("Error converting .docx file:", docxError)
+          throw new Error(
+            `Failed to process .docx file: ${docxError.message || "Invalid file format"}`
+          )
+        }
+      } else {
+        // Handle other file types (PDF, DOC, TXT) - use Gemini's File API
+        let mimeType = file.type
+        
+        // Determine MIME type based on file extension
+        if (!mimeType || mimeType === "" || mimeType === "application/octet-stream") {
+          if (fileName.endsWith(".pdf")) {
+            mimeType = "application/pdf"
+          } else if (fileName.endsWith(".doc")) {
+            mimeType = "application/msword"
+          } else if (fileName.endsWith(".txt")) {
+            mimeType = "text/plain"
+          } else {
+            mimeType = "application/octet-stream"
+          }
         } else {
-          mimeType = "application/octet-stream"
-        }
-      }
-
-      // Upload file to Gemini File API
-      // This allows Gemini to properly extract text from PDFs, DOCX, etc.
-      const uploadResponse = await fileManager.uploadFile(buffer, {
-        mimeType: mimeType,
-        displayName: file.name,
-      })
-
-      // Wait for file processing to complete (if needed)
-      // For PDFs and documents, Gemini needs to process them before they can be used
-      fileMetadata = uploadResponse.file
-      const maxWaitTime = 30000 // 30 seconds max wait
-      const pollInterval = 1000 // Check every second
-      const startTime = Date.now()
-
-      while (
-        fileMetadata.state === FileState.PROCESSING ||
-        fileMetadata.state === FileState.STATE_UNSPECIFIED
-      ) {
-        if (Date.now() - startTime > maxWaitTime) {
-          throw new Error("File processing timeout. Please try again.")
+          // Validate MIME type matches extension
+          if (fileName.endsWith(".pdf") && !mimeType.includes("pdf")) {
+            mimeType = "application/pdf"
+          } else if (fileName.endsWith(".doc") && !mimeType.includes("msword") && !mimeType.includes("word")) {
+            mimeType = "application/msword"
+          } else if (fileName.endsWith(".txt") && !mimeType.includes("text")) {
+            mimeType = "text/plain"
+          }
         }
 
-        // Wait before checking again
-        await new Promise((resolve) => setTimeout(resolve, pollInterval))
-
-        // Check file status
-        fileMetadata = await fileManager.getFile(fileMetadata.name)
-      }
-
-      if (fileMetadata.state === FileState.FAILED) {
-        throw new Error(
-          fileMetadata.error?.message || "File processing failed. Please check the file format."
-        )
-      }
-
-      // Create file data part using the uploaded file URI
-      // Gemini will automatically extract and process the text content
-      fileDataPart = {
-        fileData: {
+        // Upload file to Gemini File API
+        const uploadResponse = await fileManager.uploadFile(buffer, {
           mimeType: mimeType,
-          fileUri: fileMetadata.uri,
-        },
+          displayName: file.name,
+        })
+
+        // Wait for file processing to complete
+        fileMetadata = uploadResponse.file
+        const maxWaitTime = 30000 // 30 seconds max wait
+        const pollInterval = 1000 // Check every second
+        const startTime = Date.now()
+
+        while (
+          fileMetadata.state === FileState.PROCESSING ||
+          fileMetadata.state === FileState.STATE_UNSPECIFIED
+        ) {
+          if (Date.now() - startTime > maxWaitTime) {
+            throw new Error("File processing timeout. Please try again.")
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, pollInterval))
+          fileMetadata = await fileManager.getFile(fileMetadata.name)
+        }
+
+        if (fileMetadata.state === FileState.FAILED) {
+          throw new Error(
+            fileMetadata.error?.message || "File processing failed. Please check the file format."
+          )
+        }
+
+        // Create file data part using the uploaded file URI
+        fileDataPart = {
+          fileData: {
+            mimeType: mimeType,
+            fileUri: fileMetadata.uri,
+          },
+        }
+        parts.push(fileDataPart)
       }
-      parts.push(fileDataPart)
     }
 
     // Add text message
@@ -675,14 +794,11 @@ Return your analysis in the exact JSON format specified in the system prompt.`
     const result = await chat.sendMessage(parts)
     const response = result.response.text()
 
-    // Try to parse JSON response from LLM
+    // Try to parse JSON response from LLM using robust extraction
     try {
-      // Remove markdown code blocks if present
-      let jsonString = response.trim()
-      if (jsonString.startsWith("```json")) {
-        jsonString = jsonString.replace(/^```json\s*/, "").replace(/\s*```$/, "")
-      } else if (jsonString.startsWith("```")) {
-        jsonString = jsonString.replace(/^```\s*/, "").replace(/\s*```$/, "")
+      const jsonString = extractJSON(response)
+      if (!jsonString) {
+        throw new Error("No JSON found in response")
       }
 
       const analysisResult = JSON.parse(jsonString)
@@ -690,7 +806,7 @@ Return your analysis in the exact JSON format specified in the system prompt.`
       // Check if this is a resume analysis response with ATS score
       if (analysisResult.ats_score && typeof analysisResult.ats_score.score === "number") {
         const atsScore = analysisResult.ats_score.score
-        const threshold = 60
+        const threshold = 50
 
         if (atsScore < threshold) {
           // Score is below threshold - return all feedback
@@ -754,12 +870,10 @@ ${analysisResult.formatting_issues?.length > 0
               const skillsResult = await skillsChat.sendMessage(skillsParts)
               const skillsResponse = skillsResult.response.text()
 
-              // Parse skills JSON response
-              let skillsJsonString = skillsResponse.trim()
-              if (skillsJsonString.startsWith("```json")) {
-                skillsJsonString = skillsJsonString.replace(/^```json\s*/, "").replace(/\s*```$/, "")
-              } else if (skillsJsonString.startsWith("```")) {
-                skillsJsonString = skillsJsonString.replace(/^```\s*/, "").replace(/\s*```$/, "")
+              // Parse skills JSON response using robust extraction
+              const skillsJsonString = extractJSON(skillsResponse)
+              if (!skillsJsonString) {
+                throw new Error("Failed to extract JSON from skills response")
               }
 
               skillsData = JSON.parse(skillsJsonString)
@@ -826,7 +940,7 @@ Let's get started with the first question!`
             hasSkills: !!skillsData?.skills,
             skillsCount: skillsData?.skills ? Object.keys(skillsData.skills).length : 0,
             fileUri: fileMetadata?.uri || null, // Include file URI for later analysis
-            fileMimeType: fileDataPart?.fileData?.mimeType || "application/pdf", // Include MIME type for later analysis
+            fileMimeType: fileDataPart?.fileData?.mimeType || "text/plain", // Include MIME type for later analysis
           })
         }
       }

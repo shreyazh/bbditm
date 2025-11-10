@@ -69,15 +69,15 @@ export default function Footer() {
             <h4 className="font-semibold mb-4">Contact</h4>
             <ul className="space-y-3 text-sm">
               <li className="flex gap-2">
-                <MapPin size={16} className="flex-shrink-0 mt-0.5" />
+                <MapPin size={16} className="shrink-0 mt-0.5" />
                 <span>Lucknow, Uttar Pradesh, India</span>
               </li>
               <li className="flex gap-2">
-                <Phone size={16} className="flex-shrink-0 mt-0.5" />
+                <Phone size={16} className="shrink-0 mt-0.5" />
                 <span>+91 (522) XXXX-XXXX</span>
               </li>
               <li className="flex gap-2">
-                <Mail size={16} className="flex-shrink-0 mt-0.5" />
+                <Mail size={16} className="shrink-0 mt-0.5" />
                 <span>info@bbditm.ac.in</span>
               </li>
             </ul>
