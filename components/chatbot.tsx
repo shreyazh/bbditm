@@ -797,7 +797,7 @@ export default function ChatBot() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Quick Questions */}
+          {/* Quick Questions
           {messages.length === 1 && !isLoading && (
             <div className="px-4 py-3 border-t border-border bg-card/50">
               <p className="text-xs text-muted-foreground mb-2">Quick questions:</p>
@@ -815,7 +815,7 @@ export default function ChatBot() {
                 ))}
               </div>
             </div>
-          )}
+          )} */}
 
           {/* File Upload Display */}
           {file && (
