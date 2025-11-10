@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI, FileDataPart } from "@google/generative-ai"
 import { GoogleAIFileManager, FileState } from "@google/generative-ai/server"
 import { type NextRequest, NextResponse } from "next/server"
+import mammoth from "mammoth"
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "")
 const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY || "")
@@ -74,14 +75,12 @@ const systemPrompt = `You are a state-of-the-art Applicant Tracking System (ATS)
 
 Your task is to perform a strict, critical analysis of the attached resume file against the provided job description. You must score the resume based on semantic relevance, skills, and experience—not just keyword-stuffing.
 
-The user has attached one (1) PDF file for the resume.
-The user has also provided the job description as plain text, enclosed in <job_description> tags.
 
 **Input Data:**
 
-<job_description>
-[Your backend will insert the job_description text here]
-</job_description>
+The user has attached one (1) PDF file for the resume.
+
+The user will also provide the job description as plain text.
 
 **Analysis and Response:**
 
@@ -479,7 +478,7 @@ Return your analysis in the exact JSON format specified in the system prompt.`
         // Create file data part using the file URI
         const fileDataPart: FileDataPart = {
           fileData: {
-            mimeType: fileMimeType || "application/pdf", // Use provided MIME type or default to PDF
+            mimeType: fileMimeType || "text/plain", // Use provided MIME type or default to text/plain
             fileUri: fileUri,
           },
         }
@@ -641,72 +640,130 @@ Return your analysis in the exact JSON format specified in the system prompt.`
     let fileDataPart: FileDataPart | null = null
     let fileMetadata: any = null
 
-    // Handle file upload - use Gemini's File API for proper PDF processing
+    // Handle file upload
     if (file) {
       const buffer = Buffer.from(await file.arrayBuffer())
+      const fileName = file.name.toLowerCase()
       
-      // Determine MIME type
-      let mimeType = file.type
-      if (!mimeType) {
-        // Fallback MIME type detection based on file extension
-        const fileName = file.name.toLowerCase()
-        if (fileName.endsWith(".pdf")) {
-          mimeType = "application/pdf"
-        } else if (fileName.endsWith(".doc")) {
-          mimeType = "application/msword"
-        } else if (fileName.endsWith(".docx")) {
-          mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        } else if (fileName.endsWith(".txt")) {
-          mimeType = "text/plain"
+      // Handle .docx files: Convert to text using mammoth since Gemini doesn't support .docx directly
+      if (fileName.endsWith(".docx")) {
+        try {
+          // Convert .docx to text using mammoth
+          const result = await mammoth.extractRawText({ buffer: buffer })
+          const docxText = result.value
+          
+          // Create a text buffer from the converted content
+          const textBuffer = Buffer.from(docxText, "utf-8")
+          
+          // Upload as text/plain instead of .docx
+          const uploadResponse = await fileManager.uploadFile(textBuffer, {
+            mimeType: "text/plain",
+            displayName: file.name.replace(/\.docx$/i, ".txt"),
+          })
+
+          // Wait for file processing to complete
+          fileMetadata = uploadResponse.file
+          const maxWaitTime = 30000 // 30 seconds max wait
+          const pollInterval = 1000 // Check every second
+          const startTime = Date.now()
+
+          while (
+            fileMetadata.state === FileState.PROCESSING ||
+            fileMetadata.state === FileState.STATE_UNSPECIFIED
+          ) {
+            if (Date.now() - startTime > maxWaitTime) {
+              throw new Error("File processing timeout. Please try again.")
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, pollInterval))
+            fileMetadata = await fileManager.getFile(fileMetadata.name)
+          }
+
+          if (fileMetadata.state === FileState.FAILED) {
+            throw new Error(
+              fileMetadata.error?.message || "File processing failed. Please check the file format."
+            )
+          }
+
+          // Create file data part using the uploaded text file URI
+          fileDataPart = {
+            fileData: {
+              mimeType: "text/plain",
+              fileUri: fileMetadata.uri,
+            },
+          }
+          parts.push(fileDataPart)
+        } catch (docxError: any) {
+          console.error("Error converting .docx file:", docxError)
+          throw new Error(
+            `Failed to process .docx file: ${docxError.message || "Invalid file format"}`
+          )
+        }
+      } else {
+        // Handle other file types (PDF, DOC, TXT) - use Gemini's File API
+        let mimeType = file.type
+        
+        // Determine MIME type based on file extension
+        if (!mimeType || mimeType === "" || mimeType === "application/octet-stream") {
+          if (fileName.endsWith(".pdf")) {
+            mimeType = "application/pdf"
+          } else if (fileName.endsWith(".doc")) {
+            mimeType = "application/msword"
+          } else if (fileName.endsWith(".txt")) {
+            mimeType = "text/plain"
+          } else {
+            mimeType = "application/octet-stream"
+          }
         } else {
-          mimeType = "application/octet-stream"
-        }
-      }
-
-      // Upload file to Gemini File API
-      // This allows Gemini to properly extract text from PDFs, DOCX, etc.
-      const uploadResponse = await fileManager.uploadFile(buffer, {
-        mimeType: mimeType,
-        displayName: file.name,
-      })
-
-      // Wait for file processing to complete (if needed)
-      // For PDFs and documents, Gemini needs to process them before they can be used
-      fileMetadata = uploadResponse.file
-      const maxWaitTime = 30000 // 30 seconds max wait
-      const pollInterval = 1000 // Check every second
-      const startTime = Date.now()
-
-      while (
-        fileMetadata.state === FileState.PROCESSING ||
-        fileMetadata.state === FileState.STATE_UNSPECIFIED
-      ) {
-        if (Date.now() - startTime > maxWaitTime) {
-          throw new Error("File processing timeout. Please try again.")
+          // Validate MIME type matches extension
+          if (fileName.endsWith(".pdf") && !mimeType.includes("pdf")) {
+            mimeType = "application/pdf"
+          } else if (fileName.endsWith(".doc") && !mimeType.includes("msword") && !mimeType.includes("word")) {
+            mimeType = "application/msword"
+          } else if (fileName.endsWith(".txt") && !mimeType.includes("text")) {
+            mimeType = "text/plain"
+          }
         }
 
-        // Wait before checking again
-        await new Promise((resolve) => setTimeout(resolve, pollInterval))
-
-        // Check file status
-        fileMetadata = await fileManager.getFile(fileMetadata.name)
-      }
-
-      if (fileMetadata.state === FileState.FAILED) {
-        throw new Error(
-          fileMetadata.error?.message || "File processing failed. Please check the file format."
-        )
-      }
-
-      // Create file data part using the uploaded file URI
-      // Gemini will automatically extract and process the text content
-      fileDataPart = {
-        fileData: {
+        // Upload file to Gemini File API
+        const uploadResponse = await fileManager.uploadFile(buffer, {
           mimeType: mimeType,
-          fileUri: fileMetadata.uri,
-        },
+          displayName: file.name,
+        })
+
+        // Wait for file processing to complete
+        fileMetadata = uploadResponse.file
+        const maxWaitTime = 30000 // 30 seconds max wait
+        const pollInterval = 1000 // Check every second
+        const startTime = Date.now()
+
+        while (
+          fileMetadata.state === FileState.PROCESSING ||
+          fileMetadata.state === FileState.STATE_UNSPECIFIED
+        ) {
+          if (Date.now() - startTime > maxWaitTime) {
+            throw new Error("File processing timeout. Please try again.")
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, pollInterval))
+          fileMetadata = await fileManager.getFile(fileMetadata.name)
+        }
+
+        if (fileMetadata.state === FileState.FAILED) {
+          throw new Error(
+            fileMetadata.error?.message || "File processing failed. Please check the file format."
+          )
+        }
+
+        // Create file data part using the uploaded file URI
+        fileDataPart = {
+          fileData: {
+            mimeType: mimeType,
+            fileUri: fileMetadata.uri,
+          },
+        }
+        parts.push(fileDataPart)
       }
-      parts.push(fileDataPart)
     }
 
     // Add text message
@@ -883,7 +940,7 @@ Let's get started with the first question!`
             hasSkills: !!skillsData?.skills,
             skillsCount: skillsData?.skills ? Object.keys(skillsData.skills).length : 0,
             fileUri: fileMetadata?.uri || null, // Include file URI for later analysis
-            fileMimeType: fileDataPart?.fileData?.mimeType || "application/pdf", // Include MIME type for later analysis
+            fileMimeType: fileDataPart?.fileData?.mimeType || "text/plain", // Include MIME type for later analysis
           })
         }
       }

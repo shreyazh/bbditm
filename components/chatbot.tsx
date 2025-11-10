@@ -637,16 +637,23 @@ export default function ChatBot() {
         setError("File size must be less than 5MB")
         return
       }
-      const allowedTypes = [
-        "application/pdf",
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "text/plain",
-      ]
-      if (!allowedTypes.includes(selectedFile.type)) {
+      
+      // Get file extension (primary validation - most reliable across all browsers/OSes)
+      // MIME types can vary across browsers/OSes, especially for .docx files which may be
+      // reported as application/zip, application/octet-stream, or various OpenXML MIME types
+      const fileName = selectedFile.name.toLowerCase()
+      const fileExtension = fileName.substring(fileName.lastIndexOf("."))
+      
+      // Allowed file extensions
+      const allowedExtensions = [".pdf", ".doc", ".docx", ".txt"]
+      
+      // Validate file extension (this is the most reliable method)
+      // The API route will handle actual file processing and validation
+      if (!allowedExtensions.includes(fileExtension)) {
         setError("Only PDF, DOC, DOCX, and TXT files are supported")
         return
       }
+      
       setFile(selectedFile)
       setError(null)
     }
