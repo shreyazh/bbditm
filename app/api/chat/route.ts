@@ -435,9 +435,8 @@ export async function POST(request: NextRequest) {
         console.log("\n=== Starting Skills Analysis ===")
         console.log(`File URI: ${fileUri}`)
         console.log(`Skills to analyze: ${Object.keys(skills).length}`)
-
-        // Create analysis model
-        const analysisModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
+        // Create analysis model - using Gemini 2.5 Pro for comprehensive analysis
+        const analysisModel = genAI.getGenerativeModel({ model: "gemini-2.5-pro" })
         const analysisChat = analysisModel.startChat({
           history: [
             {
@@ -750,7 +749,7 @@ Return your analysis in the exact JSON format specified in the system prompt.`
       // Check if this is a resume analysis response with ATS score
       if (analysisResult.ats_score && typeof analysisResult.ats_score.score === "number") {
         const atsScore = analysisResult.ats_score.score
-        const threshold = 60
+        const threshold = 50
 
         if (atsScore < threshold) {
           // Score is below threshold - return all feedback
