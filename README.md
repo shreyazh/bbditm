@@ -194,7 +194,8 @@ This project is private and proprietary.
 
 ## 👥 Contributors
 
-- Generator: ahmersiddiqui
+- Generator: shreyazh
+- Contributor: ahmersiddiqui9889
 
 ## 🤝 Support
 
